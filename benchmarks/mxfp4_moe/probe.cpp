@@ -1,0 +1,38 @@
+#include "../../csrc/ops/mxfp4_moe.hpp"
+#include "../../csrc/common/experiment_device.hpp"
+#include <synapse_common_types.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+static void ck(synStatus s,const char*w){if(s!=synSuccess)throw std::runtime_error(std::string(w)+": "+std::to_string(s));}
+static std::vector<char> read(const std::string&p){std::ifstream f(p,std::ios::binary|std::ios::ate);if(!f)throw std::runtime_error(p);auto size=f.tellg();f.seekg(0);std::vector<char>b(size);f.read(b.data(),size);return b;}
+static void save(const std::string&name,const void*d,size_t b){std::ofstream f(std::string(std::getenv("PROBE_OUT"))+"/"+name,std::ios::binary);f.write((const char*)d,b);}
+static uint16_t bf(float f){uint32_t u;std::memcpy(&u,&f,4);return u>>16;}
+struct Buffer{std::string name;synTensor tensor;uint64_t bytes,addr;void*host;bool output;};
+int main(int argc,char**argv){synDeviceId device=0;bool initialized=false,acquired=false;try{
+ if(argc!=4)throw std::invalid_argument("fixture direct|fused|fused256 repeats");std::string dir=argv[1],mode=argv[2];int repeats=std::stoi(argv[3]),n,k,t,r,e;std::ifstream(dir+"/config.txt")>>n>>k>>t>>r>>e;
+ auto fixture=read(dir+"/fixture.json");save("fixture.json",fixture.data(),fixture.size());std::printf("{\"stage\":\"initialize\"}\n");std::fflush(stdout);ck(synInitialize(),"initialize");initialized=true;std::printf("{\"stage\":\"acquire_begin\"}\n");std::fflush(stdout);ck(synDeviceAcquireByModuleId(&device,gaudi_experiment_module()),"module");acquired=true;std::printf("{\"stage\":\"acquired\"}\n");std::fflush(stdout);
+ synGraphHandle graph;ck(synGraphCreate(&graph,synDeviceGaudi2),"graph");std::vector<Buffer>buffers;buffers.reserve(8);
+ auto tensor=[&](std::string name,synDataType type,int x,int y,unsigned size,bool output=false){synTensorDescriptor d{};d.m_name=name.c_str();d.m_dataType=type;d.m_dims=2;d.m_sizes[0]=d.m_minSizes[0]=x;d.m_sizes[1]=d.m_minSizes[1]=y;synSectionHandle section;ck(synSectionCreate(&section,0,graph),"section");ck(synSectionSetPersistent(section,true),"persistent");Buffer b{name,nullptr,uint64_t(x)*y*size,0,nullptr,output};ck(synTensorCreate(&b.tensor,&d,section,0),"tensor");ck(synHostMalloc(device,b.bytes,0,&b.host),"host");ck(synDeviceMalloc(device,b.bytes,0,0,&b.addr),"device");if(name!="lut"&&name!="directions"&&!output){auto data=read(dir+"/"+((mode=="old"&&(name=="packed"||name=="scales"))?"legacy_":"")+name+".bin");if(data.size()!=b.bytes)throw std::runtime_error("input bytes");std::memcpy(b.host,data.data(),b.bytes);}else std::memset(b.host,0,b.bytes);buffers.push_back(b);return b.tensor;};
+ auto w=tensor("packed",syn_type_packed_mxfp4,256,e*(n/512)*k,1),s=tensor("scales",syn_type_uint8,512,e*(n/512)*(k/32),1),a=tensor("activation",syn_type_bf16,k,t*r,2),ids=tensor("ids",syn_type_int32,r,t,4),routing=tensor("routing",syn_type_single,r,t,4),lut=tensor("lut",syn_type_bf16,512,1,2);auto*table=(uint16_t*)buffers.back().host;float q[]={0,.5,1,1.5,2,3,4,6,-0.f,-.5,-1,-1.5,-2,-3,-4,-6};for(int i=0;i<256;++i){table[2*i]=bf(q[i&15]);table[2*i+1]=bf(q[i>>4]);}auto y=tensor("output",syn_type_single,n,t,4,true);
+ using namespace gaudi_kernels::mxfp4_moe;Plan plan;plan.caller_certifies_fast_arithmetic=true;plan.allow_unqualified_experiments=true;plan.engine=mode=="direct"?Engine::Direct512:mode=="fused"?Engine::Fused512:mode=="fused256"?Engine::Fused256:Engine::Fused256C;Resources resources;
+ if(mode=="old"){
+  if(n!=6144||k!=256)throw std::invalid_argument("legacy shape");
+  auto dirs=tensor("directions",syn_type_uint8,256,2,1);auto*bytes=(uint8_t*)buffers.back().host;for(int parity=0;parity<2;++parity)for(int byte=0;byte<256;++byte){int lane=byte/4;bytes[parity*256+byte]=(lane%16)/2+((lane/16)%2)*32+(lane%2==parity?128:0);}
+  synTensorDescriptor d{};d.m_name="legacy_partials";d.m_dataType=syn_type_single;d.m_dims=2;d.m_sizes[0]=d.m_minSizes[0]=n*t*r;d.m_sizes[1]=d.m_minSizes[1]=1;synTensor partial;ck(synTensorCreate(&partial,&d,nullptr,0),"legacy partial");resources.tensors.push_back(partial);
+  synTensor inputs[]={w,s,a,lut,ids};ck(synNodeCreate(graph,inputs,&partial,5,1,nullptr,0,"gk_mxfp4_moe_legacy_down","legacy_direct_down",nullptr,nullptr),"legacy down");synTensor combine[]={partial,routing,dirs};ck(synNodeCreate(graph,combine,&y,3,1,&r,4,"gk_mxfp4_moe_legacy_combine","legacy_precision_combine",nullptr,nullptr),"legacy combine");resources.nodes=2;
+ }else resources=append_routed_down(graph,w,s,a,ids,routing,lut,y,n,k,t,r,e,plan);
+ std::printf("{\"stage\":\"compile_begin\",\"mode\":\"%s\"}\n",mode.c_str());std::fflush(stdout);synRecipeHandle recipe;ck(synGraphCompile(&recipe,graph,"mxfp4_moe",nullptr),"compile");std::printf("{\"stage\":\"compiled\"}\n");std::fflush(stdout);
+ synStreamHandle stream;ck(synStreamCreateGeneric(&stream,device,0),"stream");std::vector<synLaunchTensorInfo>launch;for(auto&b:buffers){synLaunchTensorInfo info{};info.tensorName=b.name.c_str();info.tensorType=DATA_TENSOR;info.pTensorAddress=b.addr;launch.push_back(info);if(!b.output){ck(synMemCopyAsync(stream,uint64_t(b.host),b.bytes,b.addr,HOST_TO_DRAM),"h2d");save(b.name+".bin",b.host,b.bytes);}}
+ uint64_t bytes=0,workspace=0;ck(synWorkspaceGetSize(&bytes,recipe),"workspace");if(bytes)ck(synDeviceMalloc(device,bytes,0,0,&workspace),"workspace alloc");auto run=[&](){ck(synLaunch(stream,launch.data(),launch.size(),workspace,recipe,SYN_FLAGS_TENSOR_NAME),"launch");};run();auto&output=*std::find_if(buffers.begin(),buffers.end(),[](const Buffer&b){return b.output;});ck(synMemCopyAsync(stream,output.addr,output.bytes,uint64_t(output.host),DRAM_TO_HOST),"d2h");ck(synStreamSynchronize(stream),"sync");save("output.bin",output.host,output.bytes);
+ auto refraw=read(dir+"/reference.f64"),absraw=read(dir+"/sumabs.f64");save("reference.f64",refraw.data(),refraw.size());save("sumabs.f64",absraw.data(),absraw.size());auto*ref=(double*)refraw.data();auto*norm=(double*)absraw.data();auto*value=(float*)output.host;unsigned bad=0;double maxback=0,maxerr=0;for(int i=0;i<n*t;++i){double delta=std::abs(double(value[i])-ref[i]);bad+=!std::isfinite(value[i])||delta>2e-6*norm[i]+1e-35;maxerr=std::max(maxerr,delta);maxback=std::max(maxback,delta/std::max(norm[i],1e-300));}
+ std::printf("{\"stage\":\"gate\",\"checked\":%d,\"bad\":%u,\"max_abs\":%.12g,\"max_backward\":%.12g,\"workspace\":%llu,\"compute_nodes\":%u}\n",n*t,bad,maxerr,maxback,(unsigned long long)bytes,resources.nodes);std::fflush(stdout);if(bad)throw std::runtime_error("full output gate");for(int i=0;i<10;++i)run();ck(synStreamSynchronize(stream),"warmup");synEventHandle begin,end;ck(synEventCreate(&begin,device,EVENT_COLLECT_TIME),"event");ck(synEventCreate(&end,device,EVENT_COLLECT_TIME),"event");for(int sample=0;sample<5;++sample){auto wall=std::chrono::steady_clock::now();ck(synEventRecord(begin,stream),"start");for(int j=0;j<repeats;++j)run();ck(synEventRecord(end,stream),"end");ck(synEventSynchronize(end),"event sync");uint64_t ns;ck(synEventElapsedTime(&ns,begin,end),"elapsed");double us=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-wall).count()/repeats;std::printf("{\"stage\":\"timing\",\"sample\":%d,\"event_us\":%.6f,\"wall_us\":%.6f}\n",sample,double(ns)/1000/repeats,us);}
+ ck(synDeviceRelease(device),"release");acquired=false;ck(synDestroy(),"destroy");initialized=false;return 0;
+ }catch(const std::exception&ex){std::fprintf(stderr,"FAIL %s\n",ex.what());if(acquired)synDeviceRelease(device);if(initialized)synDestroy();return 3;}}

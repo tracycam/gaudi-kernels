@@ -1,0 +1,56 @@
+diff --git a/vllm_gaudi/envs.py b/vllm_gaudi/envs.py
+index 5db96cd0..bfda6c3c 100644
+--- a/vllm_gaudi/envs.py
++++ b/vllm_gaudi/envs.py
+@@ -4,7 +4,6 @@ import os
+ from typing import TYPE_CHECKING, Any, Callable, Optional
+ 
+ if TYPE_CHECKING:
+-    GK_QKV_POST_ENABLED: bool = False
+     VLLM_USE_HPU_CONTIGUOUS_CACHE_FETCH: bool = True
+     VLLM_HPU_FORCE_CHANNEL_FP8: bool = True
+     VLLM_HPU_HETERO_KV_LAYOUT: bool = False
+@@ -30,7 +29,6 @@ if TYPE_CHECKING:
+ environment_variables: dict[str, Callable[[], Any]] = {
+     # Explicit external-kernel experiment. Its launcher must load the public
+     # graph-owned reshape operator before model execution.
+-    "GK_QKV_POST_ENABLED": lambda: os.environ.get("GK_QKV_POST_ENABLED", "0") == "1",
+     # Contiguous cache fetching to avoid using costly gather operation on
+     # Gaudi3. This is only applicable to HPU contiguous cache. If set to true,
+     # contiguous cache fetch will be used.
+diff --git a/vllm_gaudi/v1/worker/hpu_model_runner.py b/vllm_gaudi/v1/worker/hpu_model_runner.py
+index 252e7047..7e4c1bbb 100644
+--- a/vllm_gaudi/v1/worker/hpu_model_runner.py
++++ b/vllm_gaudi/v1/worker/hpu_model_runner.py
+@@ -1080,6 +1080,15 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
+         if hasattr(self._rotary_embed_module, "sin"):
+             delattr(self._rotary_embed_module, "sin")
+ 
++    def flatten_positions(self, positions: torch.Tensor) -> torch.Tensor:
++        """Shape model positions; custom adapters may provide a graph-owned edge.
++
++        Consumers that bypass the standard rotary module can require a real
++        graph output rather than a temporary Lazy view. Adapter subclasses
++        select that boundary explicitly, before capture.
++        """
++        return positions.reshape(-1)
++
+     def forward(self, *args, **kwargs):
+         # TODO(kzawora): something goes VERY WRONG when operating on
+         # kwargs['attn_metadata'].slot_mapping, compared to untrimmed metadata
+@@ -1121,14 +1130,7 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
+         if self.flatten_input:
+             kwargs['input_ids'] = input_ids.view(-1)
+             if not self.vllm_config.model_config.uses_mrope:
+-                positions = kwargs['positions']
+-                if gaudi_envs.GK_QKV_POST_ENABLED:
+-                    # The opt-in custom consumer needs a graph-owned shape
+-                    # edge. Share it across layers instead of passing a Lazy
+-                    # temporary view or materializing a copy at each consumer.
+-                    kwargs['positions'] = torch.ops.gaudi_swa128.reshape(positions, [positions.numel()])
+-                else:
+-                    kwargs['positions'] = positions.reshape(-1)
++                kwargs['positions'] = self.flatten_positions(kwargs['positions'])
+             for key in ('hidden_states', 'inputs_embeds'):
+                 if kwargs.get(key) is not None:
+                     value = kwargs[key]

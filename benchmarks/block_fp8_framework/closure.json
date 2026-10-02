@@ -1,0 +1,8 @@
+[
+ {"name":"zero-bias-a8","shape":[2,129,129],"activation":"per_block_fp8","input_fixture":"zero","quant_gate":true},
+ {"name":"cancel-bias-a16","shape":[2,129,129],"activation":"bf16","scale_math":"bf16","input_fixture":"cancellation"},
+ {"name":"tail-a8-513","shape":[3,257,513],"activation":"per_block_fp8","quant_gate":true},
+ {"name":"quantized-consumer-tail","shape":[3,257,513],"activation":"per_block_fp8","quantized_input":true},
+ {"name":"qkv-a8-m1","shape":[1,3392,6144],"activation":"per_block_fp8","fixture":"inputs/original-fp8-qkv"},
+ {"name":"qkv-a8-m16","shape":[16,3392,6144],"activation":"per_block_fp8","fixture":"inputs/original-fp8-qkv"}
+]

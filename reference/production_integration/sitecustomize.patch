@@ -1,0 +1,25 @@
+--- a/executor/sitecustomize.py
++++ b/executor/sitecustomize.py
+@@ -14,6 +14,8 @@
+                        'vllm.model_executor.model_loader.default_loader',
+                        'vllm_gaudi.extension.ops',
+                        'vllm.model_executor.layers.fused_moe.router.gate_linear'}
++            if os.environ.get('GK_BLOCK_FP8') == '1':
++                targets.add('vllm_gaudi.ops.hpu_fp8')
+             if MODE == 'skip-moe-output-view':
+                 targets.add('vllm_gaudi.ops.hpu_mxfp4')
+             if os.getenv('GK_BLOCK_FP8_ENABLED') == '1':
+@@ -55,6 +57,13 @@
+                             scope=os.getenv('GK_BLOCK_FP8_SCOPE','qkv'),
+                             policy=os.getenv('GK_BLOCK_FP8_POLICY','bf16_fp32'),
+                             extension_path=os.environ['GK_BLOCK_FP8_TORCH_LIBRARY'])
++                    if fullname == 'vllm_gaudi.ops.hpu_fp8' and os.environ.get('GK_BLOCK_FP8') == '1':
++                        from gaudi_kernels.production_integration import install_block_fp8
++                        install_block_fp8(module,
++                            scope=os.environ.get('GK_BLOCK_FP8_SCOPE', 'qkv'),
++                            policy=os.environ.get('GK_BLOCK_FP8_POLICY', 'bf16_fp32'),
++                            extension_path=os.environ['GK_BLOCK_FP8_TORCH_LIBRARY'],
++                            expected_qkv_shape=(3392, 6144))
+                     if fullname.endswith(('extension.ops','router.gate_linear','hpu_communicator')):
+                         from precision_runtime import install as install_precision
+                         install_precision(module)

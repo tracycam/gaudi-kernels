@@ -1,0 +1,38 @@
+--- a/vllm_gaudi/v1/worker/hpu_worker.py
++++ b/vllm_gaudi/v1/worker/hpu_worker.py
+@@ -156,6 +156,14 @@
+             raise RuntimeError("Profiler is not enabled.")
+         self.profiler.stop()
+ 
++    def create_model_runner(self, vllm_config: VllmConfig) -> HPUModelRunner:
++        """Construct a runner; worker subclasses may override this factory.
++
++        Device setup, distributed initialization, seeding and runner
++        lifecycle remain owned by the worker.
++        """
++        return HPUModelRunner(vllm_config=vllm_config, is_driver_worker=self.is_driver_worker)
++
+     def init_device(self):
+         self.device = torch.device("hpu")
+         # Initialize the distributed environment.
+@@ -163,7 +171,7 @@
+         # Set random seed.
+         set_random_seed(self.model_config.seed)
+         with set_current_vllm_config(self.vllm_config):
+-            self.model_runner = HPUModelRunner(vllm_config=self.vllm_config, is_driver_worker=self.is_driver_worker)
++            self.model_runner = self.create_model_runner(self.vllm_config)
+         self.init_profiler()
+ 
+     def shutdown(self):
+@@ -258,10 +266,7 @@
+                 return
+ 
+             with set_current_vllm_config(vllm_config):
+-                self.model_runner = HPUModelRunner(
+-                    vllm_config=vllm_config,
+-                    is_driver_worker=self.is_driver_worker,
+-                )
++                self.model_runner = self.create_model_runner(vllm_config)
+         with set_current_vllm_config(self.vllm_config):
+             self.model_runner.load_model()  # type: ignore[union-attr]
+ 

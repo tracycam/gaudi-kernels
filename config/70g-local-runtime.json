@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "model": "mimo-v2.6-pro",
+  "parallel": {
+    "tp": 8,
+    "ep": 1
+  },
+  "precision_contract": "fp32_arithmetic_v1",
+  "decode": {
+    "qkv": {
+      "impl": "block_fp8_mixed",
+      "core": "native_lanes_v1",
+      "a8_max_rows": 1,
+      "reduce": "neumaier_isa",
+      "post": "fused_all"
+    },
+    "norm": {
+      "impl": "fp32_grid24_quant"
+    },
+    "attention": {
+      "swa": "fp32_av_hoist",
+      "full": "vendor_sdpa"
+    },
+    "moe": {
+      "router": {
+        "post": "vector_top8"
+      },
+      "gate_up": {
+        "impl": "tpc_folded_scale_tail"
+      },
+      "down": {
+        "impl": "tpc_vector"
+      },
+      "combine": {
+        "sum_dtype": "bf16"
+      },
+      "dispatch": {
+        "compact_rows": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ]
+      }
+    },
+    "tp_reduce": {
+      "collective": "all_gather_fp32_local_sum"
+    }
+  },
+  "runtime": {
+    "executor": "legacy_native",
+    "flights": 1,
+    "graph_layer_interval": 70,
+    "buckets": {
+      "batch": [
+        1
+      ],
+      "tokens": [
+        1
+      ]
+    },
+    "host": {
+      "numa_binding": "local",
+      "visible_modules": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    }
+  },
+  "diagnostics": {
+    "profile": false,
+    "layer_hashes": false,
+    "same_input_audit": false
+  }
+}

@@ -1,0 +1,282 @@
+{
+  "schema_version": 2,
+  "device": "gaudi2",
+  "tensor_runtime_binding": "experimental_public_torch_bf16_fp8_mxfp4_static",
+  "production_auto_selection": false,
+  "axes": {
+    "W": "stored weight precision and encoding",
+    "A": "activation arithmetic/quantization contract, not just API tensor dtype",
+    "compute": "TPC or MME input types; FP32 accumulation tracked separately"
+  },
+  "families": [
+    {
+      "id": "fp8_w8a8_separable",
+      "contract": "FP8 W8A8; per-tensor/channel separable scales",
+      "compute": "native FP8 MME + FP32 accumulation",
+      "readiness": "operator_fixture_and_partial_framework_qualified",
+      "missing": [
+        "vLLM loading/application hook integration",
+        "full70-layer real generation and quality",
+        "arbitrary-shape placement/performance qualification"
+      ],
+      "bridge_implemented": true,
+      "model_qualified": false,
+      "source": "csrc/ops/fp8_linear.cpp",
+      "evidence": "docs/FP8-COVERAGE-RESULTS.md",
+      "framework_evidence": "docs/FRAMEWORK-COVERAGE-RESULTS.md",
+      "qualified_scope": "Exact native shape/policy plans in evidence; framework scope is smaller and separately documented",
+      "optimization_evidence": "docs/FP8-OVERHEAD-20260927.md",
+      "optimized_public_api": "linear_fp8(..., activation=..., optimized=True); default remains False",
+      "optimized_framework_evidence": "evidence/framework-overhead/result.json",
+      "supplementary_stream_evidence": "evidence/framework-overhead/stream-module4.json"
+    },
+    {
+      "id": "fp8_w8a16_separable",
+      "contract": "FP8 W8A16; no activation quantization",
+      "compute": "TPC fused GEMV or SRAM BF16 -> BF16 MME",
+      "readiness": "operator_fixture_and_partial_framework_qualified",
+      "missing": [
+        "vLLM loading/application hook integration",
+        "full70-layer real generation and quality",
+        "arbitrary-shape placement/performance qualification"
+      ],
+      "bridge_implemented": true,
+      "model_qualified": false,
+      "source": "csrc/ops/fp8_linear.cpp",
+      "evidence": "docs/FP8-COVERAGE-RESULTS.md",
+      "framework_evidence": "docs/FRAMEWORK-COVERAGE-RESULTS.md",
+      "qualified_scope": "Exact native shape/policy plans in evidence; framework scope is smaller and separately documented",
+      "optimization_evidence": "docs/FP8-OVERHEAD-20260927.md",
+      "optimized_public_api": "linear_fp8(..., activation=..., optimized=True); default remains False",
+      "optimized_framework_evidence": "evidence/framework-overhead/result.json",
+      "supplementary_stream_evidence": "evidence/framework-overhead/stream-module4.json"
+    },
+    {
+      "id": "block_fp8_w8a8_native",
+      "contract": "E4M3FN W8A8; block128 activation; FP32 128x128 weight scales",
+      "compute": "native FP8 MME -> SRAM FP32 partials -> TPC scale/reduce",
+      "readiness": "operator_fixture_qualified",
+      "model_qualified": false,
+      "bridge_implemented": false,
+      "qualified_scope": "Pinned QKV N3392/K6144 M1/16 and earlier synthetic streaming fixture; not arbitrary shapes",
+      "source": "csrc/tpc/block_fp8",
+      "evidence": "evidence/reports/MAC-ROUTES-RESULTS-20260926.md"
+    },
+    {
+      "id": "block_fp8_w8a16_bf16",
+      "contract": "E4M3FN W8A16; original BF16 activation; FP32 block scales retained; fast decode rounds scale during arithmetic",
+      "compute": "TPC -> SRAM BF16 -> BF16 MME with FP32 accumulation",
+      "readiness": "operator_fixture_qualified",
+      "model_qualified": false,
+      "bridge_implemented": false,
+      "qualified_scope": "QKV N3392/K6144 M1/64/513 and N129/135/255/257 K256 M3 tail fixtures; M513 split512+1 explicit",
+      "source": "csrc/tpc/block_fp8/dequant_native_fast.c",
+      "evidence": "evidence/reports/MAC-ROOFLINE-RESULTS-20260926.md"
+    },
+    {
+      "id": "bf16_w16a16",
+      "contract": "BF16 weights and activations, FP32 accumulation",
+      "compute": "vendor BF16 MME; TPC candidate for tiny M",
+      "readiness": "operator_fixture_and_partial_framework_qualified",
+      "missing": [
+        "vLLM loading/application hook integration",
+        "full70-layer real generation and quality",
+        "arbitrary-shape placement/performance qualification"
+      ],
+      "bridge_implemented": true,
+      "model_qualified": false,
+      "source": "csrc/ops/bf16_linear.cpp",
+      "evidence": "docs/BF16-COVERAGE-RESULTS.md",
+      "framework_evidence": "docs/FRAMEWORK-COVERAGE-RESULTS.md",
+      "qualified_scope": "Exact native shape/policy plans in evidence; framework scope is smaller and separately documented",
+      "optimization_evidence": "docs/BF16-OVERHEAD-20260927.md"
+    },
+    {
+      "id": "mxfp4_w4a16_tpc",
+      "contract": "E2M1 + E8M0 per32 K; BF16 activation; original four-bit storage",
+      "compute": "TPC fused GEMV; multiple rows currently repeat GEMV work",
+      "readiness": "legacy_model_specialized",
+      "source": "reference/mxfp4",
+      "qualified_scope": "Historical MiMo TP8 hidden6144/localI256; old-host evidence only, not a new-host general GEMM qualification",
+      "missing": [
+        "unified versioned packing contract",
+        "new-host artifact/precision audit",
+        "general N/K/tails"
+      ]
+    },
+    {
+      "id": "mxfp4_w4a16_grouped_bf16",
+      "contract": "E2M1 + E8M0 per32 K; original BF16 activations",
+      "compute": "host-planned grouped TPC decode -> nonpersistent SRAM BF16 -> MME FP32",
+      "readiness": "operator_fixture_and_static_framework_qualified",
+      "missing": [
+        "device-dynamic expert routing/counts",
+        "full70-layer quality and TP integration",
+        "E8M0 codes outside guarded2..252 domain"
+      ],
+      "source": "csrc/ops/mxfp4_linear.cpp",
+      "model_qualified": false,
+      "bridge_implemented": true,
+      "evidence": "docs/MXFP4-COVERAGE-RESULTS.md",
+      "qualified_scope": "Host-known unequal/empty groups in one native recipe and four public HPU Graph fixtures; no device-dynamic scheduling",
+      "framework_evidence": "docs/FRAMEWORK-COVERAGE-RESULTS.md",
+      "optional_native_sram_plan": "Plan.scratch_buffers=2; total <=16MiB; measured shape-dependent gains, default1"
+    },
+    {
+      "id": "mxfp4_w4a8_grouped_fp8",
+      "contract": "Explicitly opt-in activation quantization; MXFP4 weights",
+      "compute": "native FP8 MME with block-scale handling",
+      "readiness": "optional_research",
+      "missing": [
+        "complete MAC and model quality evidence",
+        "scale/partial tiling",
+        "benefit over W4A16"
+      ]
+    },
+    {
+      "id": "fp8_w8a8_via_bf16",
+      "contract": "Preserve an explicit W8A8 numerical contract while using BF16 MME",
+      "compute": "quantized values represented in BF16; FP32 accumulation",
+      "readiness": "diagnostic_or_special_case",
+      "missing": [
+        "concrete reason to prefer over native FP8/W8A16",
+        "runtime/quality qualification"
+      ]
+    },
+    {
+      "id": "mxfp8",
+      "contract": "FP8 elements + E8M0 per32; distinct from FP32 128x128 block scales",
+      "compute": "not selected",
+      "readiness": "future_format",
+      "missing": [
+        "checkpoint-specific packing",
+        "TPC decode/scale kernels",
+        "numerical and performance qualification"
+      ]
+    },
+    {
+      "id": "mxfp4_n512_gemv_experimental",
+      "contract": "Original-width N512-native-v2 E2M1/E8M0; explicit C++ native graph only",
+      "compute": "TPC GEMV with FP32 accumulation; multiple M repeat work",
+      "source": "csrc/ops/mxfp4_overhead.hpp",
+      "preparation": "python/gaudi_kernels/mxfp4_prepared_gemv.py",
+      "readiness": "experimental_partial_numerical_qualification_failed_full_range",
+      "production_auto_selection": false,
+      "model_qualified": false,
+      "bridge_implemented": false,
+      "missing": [
+        "FP32-subnormal product/result correctness",
+        "final v8 performance measurements blocked by device preflight and SSH",
+        "general weight-reusing GEMM path",
+        "remove N512/K32 tail padding amplification: N513/K257 prepared156672B vs useful70794B"
+      ],
+      "evidence": "docs/MXFP4-OVERHEAD-20260927.md"
+    },
+    {
+      "id": "fp8_quantization_first_principles",
+      "contract": "Finite BF16 per-token dynamic FP8; unchanged FP32 scale expression and OCP/native double RNE",
+      "compute": "TPC integer-domain amax and 516-byte reciprocal table candidates",
+      "readiness": "native_device_and_public_compute_graph_qualified",
+      "production_auto_selection": false,
+      "model_qualified": false,
+      "source": "csrc/ops/fp8_first_principles.hpp",
+      "evidence": "docs/FP8-FIRST-PRINCIPLES-20260927.md",
+      "missing": [
+        "Full-model quality/TPS and TP collective integration",
+        "Framework SRAM placement parity with native recipes",
+        "Physical HBM counters and broader shape dispatch tuning"
+      ],
+      "simulator_evidence": "evidence/fp8-first-principles/simulation/summary.json",
+      "candidate_library": "artifacts/builds/fp8-recovered/builds/batch-b/libgaudi_fp8_first_principles_tpc.so",
+      "rejected_previous_library": "artifacts/builds/fp8-first-principles/build-final: F32 shuffle did not match byte-control semantics",
+      "bridge_implemented": true,
+      "device_evidence": "docs/FP8-RECOVERED-20260927.md",
+      "framework_evidence": "docs/RECOVERED-DEVICE-20260927.md"
+    },
+    {
+      "id": "fp8_shared_input_projections",
+      "contract": "Ordinary separable FP8 with same X and activation policy; loading-time concatenate N",
+      "compute": "One existing quant/decode-MME-epilogue chain; outputs are strided views unless explicitly materialized",
+      "readiness": "public_compute_graph_qualified_with_consumer_limits",
+      "production_auto_selection": false,
+      "model_qualified": false,
+      "source": "python/gaudi_kernels/fp8_projections.py",
+      "evidence": "evidence/first-principles-20260927/projection-packing.json",
+      "missing": [
+        "Downstream view-consumer model integration",
+        "Full-model quality/TPS",
+        "Unsupported same-owner input views require load-time ownership design"
+      ],
+      "framework_evidence": "docs/RECOVERED-DEVICE-20260927.md",
+      "qualified_scope": "24 cases M1/64/513 K2048 widths1024/256/256 and M3 K259 widths129/64/257; explicit W8A8 and W8A16"
+    },
+    {
+      "id": "mxfp4_compact_v3_mme",
+      "contract": "Exact original N*ceil(K/2)+N*ceil(K/32) storage; MME path requires scales2..252 and separate FP32 arithmetic certificate",
+      "compute": "Compact native/body and row-tail decode to explicit SRAM, BF16 MME reuse across M, FP32 K-tail sum/bias",
+      "readiness": "native_device_ragged_and_static_grouped_qualified",
+      "production_auto_selection": false,
+      "model_qualified": false,
+      "bridge_implemented": false,
+      "source": "csrc/ops/mxfp4_compact.hpp",
+      "preparation": "python/gaudi_kernels/mxfp4_compact.py",
+      "missing": [
+        "Public framework and model integration",
+        "Physical HBM traffic measurements",
+        "Device-driven arithmetic certificate and expert routing",
+        "K tiles beyond current SRAM capacity limit"
+      ],
+      "evidence": "docs/MXFP4-COMPACT-20260927.md",
+      "simulator_evidence": "evidence/mxfp4-compact/simulator-assets.json",
+      "device_evidence": "docs/MXFP4-COMPACT-RECOVERED-20260927.md",
+      "qualified_scope": "Ragged N513/K257 M1/2/8/64/257/513; static unequal/empty groups; explicit K256 tail decoder QKV-shaped N3392/K6144 M1/64; FP32 arithmetic certificate required",
+      "optional_plan": "Plan.row_n_tile=2048 coalesces short K tails; Plan.row_k_tile=256 improves raw-row vector fill; defaults unchanged"
+    },
+    {
+      "id": "mxfp4_integer_exact",
+      "contract": "Finite BF16/E2M1/E8M0 codes0..254 plus finite FP32 bias; exact dyadic sum then one FP32 RNE",
+      "compute": "TPC integer 18-limb accumulation; separate diagnostic GPU-style FP32 repair mode",
+      "readiness": "native_device_exact_and_aligned_m1_predispatch_qualified",
+      "production_auto_selection": false,
+      "model_qualified": false,
+      "bridge_implemented": false,
+      "source": "csrc/ops/mxfp4_exact.hpp",
+      "preparation": "python/gaudi_kernels/mxfp4_compact.py",
+      "evidence": "docs/MXFP4-EXACT-20260927.md",
+      "missing": [
+        "General weight-reusing exact GEMM",
+        "Ragged predispatch and public framework integration",
+        "Latency optimization of exact fallback",
+        "Full-model quality/TPS and physical HBM traffic"
+      ],
+      "traffic_scope": "Compact ExactOnce M1 reader logically once; multiple M repeat weights; post-fast repair rereads weights and is diagnostic",
+      "predispatch_implemented": "append_predispatch_native_m1: aligned N512/K32, metadata guard, conditional unchanged historical body, vector FP32 or exact finish",
+      "predispatch_limits": "Native device qualified M1 only; N512/K32 alignment; identity mapping; truthful scale bounds; guarded GPU-style FP32 or exact-once fallback",
+      "simulator_evidence": "evidence/mxfp4-exact/simulator-final/result.json",
+      "device_evidence": "docs/MXFP4-RECOVERED-20260927.md"
+    }
+  ],
+  "memory_acceptance": {
+    "no_resident_expanded_weight_cache": true,
+    "logical_once_weight_coverage": "verified only for documented fixtures",
+    "physical_hbm_transaction_ratio": "not_fully_measured"
+  },
+  "precision_policy": "FP32 accumulation/scaled reduction where specified; complete MAC and real model quality gates; no silent activation quantization",
+  "primary_archive": "../instance-assets/kernel-recovered-20260927",
+  "old_model_evidence": "../instance-assets/vllm-native-integration-20260925",
+  "note": "New ordinary FP8/BF16 graph fixtures do not qualify MiMo block-FP8 QKV, full-model quality/TPS, dynamic grouped MoE, or arbitrary shape SRAM behavior.",
+  "native_graph_builders": [
+    "bf16_linear",
+    "fp8_linear",
+    "mxfp4_grouped"
+  ],
+  "previous_block_fp8_archive": "../instance-assets/mac-roofline-20260926",
+  "overhead_optimization_report": "docs/OVERHEAD-INVESTIGATION-20260927.md",
+  "previous_coverage_archive": "../instance-assets/kernel-coverage-20260926",
+  "offline_first_principles_report": "docs/FIRST-PRINCIPLES-20260927.md",
+  "previous_overhead_archive": "../instance-assets/kernel-overheads-20260927",
+  "recovered_device_report": "docs/RECOVERED-DEVICE-20260927.md",
+  "submission_acceptance": "One observed Synapse API call per small compute-only replay does not qualify hardware single-launch or whole-token autonomy; HCL/SCAL/commands and ownership separate",
+  "previous_first_principles_archive": "../instance-assets/kernel-first-principles-20260927",
+  "submission_evidence": "docs/GRAPH-SUBMISSION-20260927.md"
+}

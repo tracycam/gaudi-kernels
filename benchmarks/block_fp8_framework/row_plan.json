@@ -1,0 +1,4 @@
+[
+ {"name":"qkv-a16-m513-unsplit","shape":[513,3392,6144],"activation":"bf16","scale_math":"bf16","fixture":"inputs/original-fp8-qkv"},
+ {"name":"qkv-a16-m513-split512","shape":[513,3392,6144],"activation":"bf16","scale_math":"bf16","fixture":"inputs/original-fp8-qkv","row_tile":512}
+]

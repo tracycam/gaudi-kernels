@@ -1,0 +1,50 @@
+[
+  {
+    "name": "qkv-fp32scale-m8",
+    "shape": [
+      8,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "repeats": 8
+  },
+  {
+    "name": "qkv-fp32scale-m128",
+    "shape": [
+      128,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "repeats": 8
+  },
+  {
+    "name": "qkv-fp32scale-m512",
+    "shape": [
+      512,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "repeats": 8
+  },
+  {
+    "name": "qkv-fp32scale-m513",
+    "shape": [
+      513,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "repeats": 8
+  }
+]

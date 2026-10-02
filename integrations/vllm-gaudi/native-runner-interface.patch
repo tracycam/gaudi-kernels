@@ -1,0 +1,386 @@
+diff --git a/tests/unit_tests/worker/test_decode_query_pages.py b/tests/unit_tests/worker/test_decode_query_pages.py
+new file mode 100644
+index 00000000..5ee0b8f9
+--- /dev/null
++++ b/tests/unit_tests/worker/test_decode_query_pages.py
+@@ -0,0 +1,88 @@
++# SPDX-License-Identifier: Apache-2.0
++"""CPU execution of the actual runner metadata method, without HPU imports."""
++import ast
++import itertools
++from pathlib import Path
++from types import SimpleNamespace
++import unittest
++
++import numpy as np
++import torch
++from torch.nn.utils.rnn import pad_sequence
++
++
++SOURCE = Path(__file__).resolve().parents[3] / 'vllm_gaudi/v1/worker/hpu_model_runner.py'
++
++
++def runner_method():
++    tree = ast.parse(SOURCE.read_text())
++    methods = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
++               and n.name in ('_create_decode_input_data', '_window_block_tables')]
++    namespace = dict(torch=torch, np=np, itertools=itertools, pad_sequence=pad_sequence,
++                     DecodeInputData=SimpleNamespace,
++                     HPUAttentionMetadataV1=SimpleNamespace(make_decode_metadata=lambda **kw: SimpleNamespace(**kw)),
++                     async_h2d_copy=lambda value, **kw: value.clone())
++    exec(compile(ast.Module(body=methods, type_ignores=[]), str(SOURCE), 'exec'), namespace)
++    return namespace['_create_decode_input_data']
++
++
++def build_metadata(positions, counts):
++    batch = len(counts)
++    calls = []
++
++    def buffers(tables, slots, capacity, **kwargs):
++        calls.append(dict(tables=tables, slots=slots, window=kwargs.get('force_non_contiguous', False)))
++        return (torch.tensor([page for table in tables for page in table]),
++                torch.tensor([row for row, table in enumerate(tables) for _ in table]),
++                torch.ones(sum(map(len, tables))))
++
++    instance = SimpleNamespace(
++        attn_block_size=128, _PAD_BLOCK_ID=999, _PAD_SLOT_ID=999*128,
++        bucketing_manager=SimpleNamespace(find_decode_bucket=lambda bs, blocks, *args: (bs, 1, blocks)),
++        get_dp_padding=lambda value: 0, uses_mrope=False, pin_memory=False,
++        positions_cpu=torch.tensor([p+j for p, n in zip(positions, counts) for j in range(n)]),
++        input_ids_cpu=torch.arange(sum(counts), dtype=torch.int32),
++        _resolve_block=lambda page: page, _resolve_all_blocks=lambda tables: tables,
++        get_habana_paged_attn_buffers=buffers, interleaved_sliding_window=True, sliding_window=128,
++        model_has_chunked_attention=False, num_mamba_like_layers=0, device='cpu', use_async_scheduling=False)
++    instance.copy_input_to_device = lambda role, value, **kwargs: value.clone()
++    pages = torch.tensor([[100*r+j+10 for j in range(64)] for r in range(batch)], dtype=torch.int32)
++    data = runner_method()(instance, batch, counts, np.array(positions), pages)
++    return data, calls, pages
++
++
++class DecodeQueryPages(unittest.TestCase):
++    def test_single_query_per_request_retains_page_and_slot_identity(self):
++        data, calls, pages = build_metadata([0, 127, 4095], [1, 1, 1])
++        for row, position in enumerate((0, 127, 4095)):
++            self.assertEqual(calls[0]['tables'][row], pages[row, :position//128+1].tolist())
++            self.assertEqual(data.attn_metadata.slot_mapping[row].item(),
++                             pages[row, position//128].item()*128+position%128)
++
++    def test_each_query_sees_its_own_page_prefix(self):
++        for position in (0, 125, 126, 127, 128, 4094, 4095, 4096):
++            data, calls, pages = build_metadata([position], [4])
++            full, window = calls
++            for j in range(4):
++                q = position+j
++                self.assertEqual(full['tables'][j], pages[0, :q//128+1].tolist())
++                self.assertEqual(window['tables'][j], pages[0, max(0, (q-127)//128):q//128+1].tolist())
++                self.assertEqual(data.attn_metadata.slot_mapping[j].item(), pages[0, q//128].item()*128+q%128)
++
++    def test_ragged_padding_never_writes_a_live_page(self):
++        data, calls, pages = build_metadata([127, 126, 4095], [1, 2, 4])
++        full, window = calls
++        for row, count in enumerate((1, 2, 4)):
++            for j in range(4):
++                index = row*4+j
++                slot = data.attn_metadata.slot_mapping[index].item()
++                if j >= count:
++                    self.assertEqual(slot//128, 999)
++                    self.assertEqual(full['tables'][index], [])
++                    self.assertEqual(window['tables'][index], [])
++                else:
++                    self.assertIn(slot//128, pages[row].tolist())
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/unit_tests/worker/test_runner_factory.py b/tests/unit_tests/worker/test_runner_factory.py
+new file mode 100644
+index 00000000..c9fb3675
+--- /dev/null
++++ b/tests/unit_tests/worker/test_runner_factory.py
+@@ -0,0 +1,43 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Exercise the worker factory/stash contract without importing the HPU SDK."""
++import ast
++from pathlib import Path
++from types import SimpleNamespace
++import unittest
++
++
++class RunnerFactoryTests(unittest.TestCase):
++    def methods(self):
++        source = Path(__file__).resolve().parents[3] / 'vllm_gaudi/v1/worker/hpu_worker.py'
++        names = {'_create_model_runner', '_runner_stash_key'}
++        methods = [node for node in ast.walk(ast.parse(source.read_text()))
++                   if isinstance(node, ast.FunctionDef) and node.name in names]
++        namespace = {'HPUModelRunner': object, 'VllmConfig': object}
++        exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), namespace)
++        return namespace
++
++    def test_custom_runner_is_constructed_and_cannot_reuse_other_backend_stash(self):
++        class Reference:
++            def __init__(self, **kwargs):
++                self.kwargs = kwargs
++
++        class Candidate(Reference):
++            pass
++
++        config = SimpleNamespace(
++            compilation_config=SimpleNamespace(),
++            model_config=SimpleNamespace(model='fixture', dtype='bf16', enforce_eager=False, max_model_len=128),
++            scheduler_config=SimpleNamespace(max_num_batched_tokens=32),
++            cache_config=SimpleNamespace(block_size=128))
++        methods = self.methods()
++        worker = SimpleNamespace(vllm_config=config, is_driver_worker=True, get_model_runner_cls=lambda: Candidate)
++        runner = methods['_create_model_runner'](worker)
++        self.assertIs(type(runner), Candidate)
++        self.assertIs(runner.kwargs['vllm_config'], config)
++        candidate_key = methods['_runner_stash_key'](worker, config)
++        worker.get_model_runner_cls = lambda: Reference
++        self.assertNotEqual(candidate_key, methods['_runner_stash_key'](worker, config))
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/vllm_gaudi/envs.py b/vllm_gaudi/envs.py
+index 5db96cd0..bfda6c3c 100644
+--- a/vllm_gaudi/envs.py
++++ b/vllm_gaudi/envs.py
+@@ -4,7 +4,6 @@ import os
+ from typing import TYPE_CHECKING, Any, Callable, Optional
+ 
+ if TYPE_CHECKING:
+-    GK_QKV_POST_ENABLED: bool = False
+     VLLM_USE_HPU_CONTIGUOUS_CACHE_FETCH: bool = True
+     VLLM_HPU_FORCE_CHANNEL_FP8: bool = True
+     VLLM_HPU_HETERO_KV_LAYOUT: bool = False
+@@ -30,7 +29,6 @@ if TYPE_CHECKING:
+ environment_variables: dict[str, Callable[[], Any]] = {
+     # Explicit external-kernel experiment. Its launcher must load the public
+     # graph-owned reshape operator before model execution.
+-    "GK_QKV_POST_ENABLED": lambda: os.environ.get("GK_QKV_POST_ENABLED", "0") == "1",
+     # Contiguous cache fetching to avoid using costly gather operation on
+     # Gaudi3. This is only applicable to HPU contiguous cache. If set to true,
+     # contiguous cache fetch will be used.
+diff --git a/vllm_gaudi/v1/worker/hpu_model_runner.py b/vllm_gaudi/v1/worker/hpu_model_runner.py
+index 252e7047..afd5ec5a 100644
+--- a/vllm_gaudi/v1/worker/hpu_model_runner.py
++++ b/vllm_gaudi/v1/worker/hpu_model_runner.py
+@@ -1080,6 +1080,15 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
+         if hasattr(self._rotary_embed_module, "sin"):
+             delattr(self._rotary_embed_module, "sin")
+ 
++    def flatten_positions(self, positions: torch.Tensor) -> torch.Tensor:
++        """Shape model positions; custom adapters may provide a graph-owned edge.
++
++        Consumers that bypass the standard rotary module can require a real
++        graph output rather than a temporary Lazy view. Adapter subclasses
++        select that boundary explicitly, before capture.
++        """
++        return positions.reshape(-1)
++
+     def forward(self, *args, **kwargs):
+         # TODO(kzawora): something goes VERY WRONG when operating on
+         # kwargs['attn_metadata'].slot_mapping, compared to untrimmed metadata
+@@ -1121,14 +1130,7 @@ class HpuModelAdapter(torch.nn.Module, HpuKVConnectorModelRunnerMixin):
+         if self.flatten_input:
+             kwargs['input_ids'] = input_ids.view(-1)
+             if not self.vllm_config.model_config.uses_mrope:
+-                positions = kwargs['positions']
+-                if gaudi_envs.GK_QKV_POST_ENABLED:
+-                    # The opt-in custom consumer needs a graph-owned shape
+-                    # edge. Share it across layers instead of passing a Lazy
+-                    # temporary view or materializing a copy at each consumer.
+-                    kwargs['positions'] = torch.ops.gaudi_swa128.reshape(positions, [positions.numel()])
+-                else:
+-                    kwargs['positions'] = positions.reshape(-1)
++                kwargs['positions'] = self.flatten_positions(kwargs['positions'])
+             for key in ('hidden_states', 'inputs_embeds'):
+                 if kwargs.get(key) is not None:
+                     value = kwargs[key]
+@@ -3234,6 +3236,15 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+             merge_contents(dummy_prefill_input_batches[0], *dummy_prefill_input_batches[1:])
+         return all_batches[0], dummy_prefill_input_batches[0] if dummy_prefill_input_batches else None
+ 
++    def copy_input_to_device(self, role: str, source: torch.Tensor, **kwargs) -> torch.Tensor:
++        return async_h2d_copy(source, **kwargs)
++
++    def copy_output_to_cpu(self, role: str, source: torch.Tensor) -> torch.Tensor:
++        return source.cpu()
++
++    def _wrap_model_adapter(self, *args, **kwargs):
++        return _maybe_wrap_in_hpu_graph(*args, **kwargs)
++
+     def _create_decode_input_data(self,
+                                   num_decodes,
+                                   num_scheduled_tokens,
+@@ -3246,7 +3257,10 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+         # NOTE(kzawora): the +1 is what causes this entire thing to work,
+         # as in the paged attention, we don't fetch just the context from cache,
+         # but also kvs for the current token
+-        num_blocks = np.ceil((context_lens + 1) / decode_block_size).astype(np.int32).tolist()
++        # Reserve enough pages for every scheduled query, including a verify
++        # block that crosses a page boundary. Visibility is still per query.
++        query_ends = context_lens + np.asarray(num_scheduled_tokens[:num_decodes])
++        num_blocks = np.ceil(query_ends / decode_block_size).astype(np.int32).tolist()
+ 
+         num_tokens_per_req = num_scheduled_tokens[:num_decodes]
+         num_tokens = max(num_tokens_per_req)
+@@ -3267,7 +3281,14 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+         for i, n in enumerate(num_blocks):
+             seq_block_table = block_table_cpu_tensor[i, :n].tolist()
+             assert len(seq_block_table) == n
+-            block_tables_list.extend([seq_block_table] * num_tokens)
++            for j in range(num_tokens):
++                if j < num_tokens_per_req[i]:
++                    query_pages = (int(context_lens[i]) + j) // decode_block_size + 1
++                    block_tables_list.append(seq_block_table[:query_pages])
++                else:
++                    # A short request's padding row must neither read nor
++                    # overwrite any of that request's committed cache.
++                    block_tables_list.append([])
+ 
+         ###################################
+         # initialize positions with padding
+@@ -3350,6 +3371,12 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+         pad_slot_base = self._PAD_BLOCK_ID * decode_block_size
+         dummy_slots = itertools.cycle(range(pad_slot_base, pad_slot_base + decode_block_size))
+         slot_mapping[num_decodes:].apply_(lambda _, ds=dummy_slots: next(ds))
++        if num_tokens > 1:
++            valid_queries = (torch.arange(num_tokens)[None, :]
++                             < torch.tensor(num_tokens_per_req)[:, None])
++            dummy_query_slots = (torch.arange(padded_batch_size * num_tokens).reshape(padded_batch_size, num_tokens)
++                                 % decode_block_size + pad_slot_base)
++            slot_mapping = torch.where(valid_queries, slot_mapping, dummy_query_slots)
+ 
+         #####################################
+         # NOTE(Chendi): Since we can't actually do num_tokens = 2,
+@@ -3381,7 +3408,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+ 
+         logits_indices[:num_decodes] = query_start_loc_cpu[1:num_decodes + 1] - 1
+ 
+-        positions_device = async_h2d_copy(positions, device=self.device)
++        positions_device = self.copy_input_to_device('positions', positions, device=self.device)
+         block_tables_list = self._resolve_all_blocks(block_tables_list)
+ 
+         # CONTEXT_LENS [batch_size]
+@@ -3463,15 +3490,15 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+             query_start_loc_p = None
+ 
+         # CPU<>HPU sync *should not* happen here.
+-        block_list_device = async_h2d_copy(block_list, device=self.device)
+-        block_usage_device = async_h2d_copy(block_usage, device=self.device)
+-        block_groups_device = async_h2d_copy(block_groups, device=self.device)
+-        slot_mapping_device = async_h2d_copy(slot_mapping, device=self.device)
+-        window_block_list_device = async_h2d_copy(window_block_list,
++        block_list_device = self.copy_input_to_device('block_list', block_list, device=self.device)
++        block_usage_device = self.copy_input_to_device('block_usage', block_usage, device=self.device)
++        block_groups_device = self.copy_input_to_device('block_groups', block_groups, device=self.device)
++        slot_mapping_device = self.copy_input_to_device('slot_mapping', slot_mapping, device=self.device)
++        window_block_list_device = self.copy_input_to_device('window_block_list', window_block_list,
+                                                   device=self.device) if self.interleaved_sliding_window else None
+-        window_block_usage_device = async_h2d_copy(window_block_usage,
++        window_block_usage_device = self.copy_input_to_device('window_block_usage', window_block_usage,
+                                                    device=self.device) if self.interleaved_sliding_window else None
+-        window_block_groups_device = async_h2d_copy(window_block_groups,
++        window_block_groups_device = self.copy_input_to_device('window_block_groups', window_block_groups,
+                                                     device=self.device) if self.interleaved_sliding_window else None
+         chunked_block_list_device = async_h2d_copy(chunked_block_list,
+                                                    device=self.device) if self.model_has_chunked_attention else None
+@@ -3480,7 +3507,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+         chunked_block_groups_device = async_h2d_copy(chunked_block_groups,
+                                                      device=self.device) if self.model_has_chunked_attention else None
+ 
+-        token_ids_device = async_h2d_copy(token_ids, device=self.device)
++        token_ids_device = self.copy_input_to_device('token_ids', token_ids, device=self.device)
+         # when DP also enabled, some DP ranks will exeucte dummy run with empty
+         # SchedulerOutput, in this case we need skip the prepare_input_ids
+         if self.use_async_scheduling and scheduler_output is not None:
+@@ -3512,7 +3539,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+                                                                                     token_ids_device, num_tokens)
+         else:
+             spec_decode_metadata = None
+-        logits_indices_device = async_h2d_copy(logits_indices, device=self.device)
++        logits_indices_device = self.copy_input_to_device('logits_indices', logits_indices, device=self.device)
+ 
+         attn_metadata = HPUAttentionMetadataV1.make_decode_metadata(
+             block_list=block_list_device,
+@@ -4827,11 +4854,14 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+             # We already have tokens. Let's copy the data to
+             # CPU as is, and then discard padded tokens.
+             with self.profiler.record_event('internal', "sampler_postprocessing"):
+-                prefill_sampled_token_ids = [tensor.cpu() for tensor in prefill_sampled_token_ids]
++                prefill_sampled_token_ids = [self.copy_output_to_cpu('prefill_sampled_tokens', tensor)
++                                             for tensor in prefill_sampled_token_ids]
+                 if spec_decode_num_tokens is not None:
+-                    decode_sampled_token_ids = [tensor.cpu() for tensor in decode_sampled_token_ids]
++                    decode_sampled_token_ids = [self.copy_output_to_cpu('sampled_tokens', tensor)
++                                                for tensor in decode_sampled_token_ids]
+                 else:
+-                    decode_sampled_token_ids = [tensor.cpu()[:num_decodes] for tensor in decode_sampled_token_ids]
++                    decode_sampled_token_ids = [self.copy_output_to_cpu('sampled_tokens', tensor)[:num_decodes]
++                                                for tensor in decode_sampled_token_ids]
+                 if decode_sampled_token_ids + prefill_sampled_token_ids:
+                     sampled_token_ids_list = torch.cat(decode_sampled_token_ids + prefill_sampled_token_ids).tolist()
+                 else:
+@@ -5059,7 +5089,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+ 
+         if not self.is_pooling_model:
+             with HabanaMemoryProfiler() as m:
+-                self.model = _maybe_wrap_in_hpu_graph(
++                self.model = self._wrap_model_adapter(
+                     self.model,
+                     vllm_config=self.vllm_config,
+                 )
+@@ -5092,7 +5122,7 @@ class HPUModelRunner(HpuKVConnectorModelRunnerMixin):
+                 self.drafter.model = self.drafter.model.to("hpu")
+                 torch.hpu.synchronize()
+                 with HabanaMemoryProfiler() as m:  # noqa: SIM117
+-                    self.drafter.model = _maybe_wrap_in_hpu_graph(self.drafter.model, vllm_config=self.vllm_config)
++                    self.drafter.model = self._wrap_model_adapter(self.drafter.model, vllm_config=self.vllm_config)
+                 self.model_memory_usage = m.consumed_device_memory
+                 logger.info("Wrapping in HPUGraph took %.4f GB", self.model_memory_usage / float(2**30))
+         #############################################
+diff --git a/vllm_gaudi/v1/worker/hpu_worker.py b/vllm_gaudi/v1/worker/hpu_worker.py
+index 94682fcf..4a53d4bb 100644
+--- a/vllm_gaudi/v1/worker/hpu_worker.py
++++ b/vllm_gaudi/v1/worker/hpu_worker.py
+@@ -104,7 +104,10 @@ class HPUWorker(WorkerBase):
+ 
+     def _runner_stash_key(self, vllm_config: VllmConfig) -> tuple[object, ...]:
+         compile_cfg = vllm_config.compilation_config
++        runner_cls = self.get_model_runner_cls()
+         return (
++            runner_cls.__module__,
++            runner_cls.__qualname__,
+             vllm_config.model_config.model,
+             vllm_config.model_config.dtype,
+             vllm_config.model_config.enforce_eager,
+@@ -163,9 +166,15 @@ class HPUWorker(WorkerBase):
+         # Set random seed.
+         set_random_seed(self.model_config.seed)
+         with set_current_vllm_config(self.vllm_config):
+-            self.model_runner = HPUModelRunner(vllm_config=self.vllm_config, is_driver_worker=self.is_driver_worker)
++            self.model_runner = self._create_model_runner()
+         self.init_profiler()
+ 
++    def get_model_runner_cls(self) -> type[HPUModelRunner]:
++        return HPUModelRunner
++
++    def _create_model_runner(self) -> HPUModelRunner:
++        return self.get_model_runner_cls()(vllm_config=self.vllm_config, is_driver_worker=self.is_driver_worker)
++
+     def shutdown(self):
+         self._model_runner_stash.clear()
+         self._model_runner_state_stash.clear()
+@@ -258,10 +267,7 @@ class HPUWorker(WorkerBase):
+                 return
+ 
+             with set_current_vllm_config(vllm_config):
+-                self.model_runner = HPUModelRunner(
+-                    vllm_config=vllm_config,
+-                    is_driver_worker=self.is_driver_worker,
+-                )
++                self.model_runner = self._create_model_runner()
+         with set_current_vllm_config(self.vllm_config):
+             self.model_runner.load_model()  # type: ignore[union-attr]
+ 

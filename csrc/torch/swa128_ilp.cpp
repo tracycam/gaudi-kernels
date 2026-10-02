@@ -1,0 +1,46 @@
+// Public graph contribution only. No private OpBackend or independent device/recipe.
+#include <ATen/ATen.h>
+#include <torch/library.h>
+#include <hpu_custom_op_pt2.h>
+#include <cmath>
+using Tensor=at::Tensor;using Meta=habana::PartialOutputMetaDataVector;
+namespace {
+Meta metadata(const at::Stack&s,bool window){
+ auto q=s[0].toTensor(),k=s[1].toTensor(),v=s[2].toTensor(),p=s[3].toTensor(),st=s[4].toTensor(),pos=s[5].toTensor(),sink=s[6].toTensor();double scale=s[7].toDouble();
+ for(auto t:{q,k,v,sink})TORCH_CHECK(t.scalar_type()==at::kBFloat16&&t.is_contiguous()&&!t.requires_grad(),"SWA128 BF16 contiguous inference operands required");
+ for(auto t:{p,st,pos})TORCH_CHECK((t.scalar_type()==at::kInt||(window&&t.scalar_type()==at::kLong))&&t.is_contiguous(),"SWA128 metadata must be contiguous I32");
+ for(auto t:{k,v,p,st,pos,sink})TORCH_CHECK(t.device()==q.device(),"SWA128 device mismatch");
+ TORCH_CHECK(q.dim()==3&&q.size(0)==1,"SWA128 requires exactly one decode query");
+ int64_t h=q.size(2)==192?q.size(1):q.size(2)/192;
+ TORCH_CHECK(h>0&&h<=16&&((q.size(1)==h&&q.size(2)==192)||(q.size(1)==1&&q.size(2)==h*192)),"SWA128 query must be [1,H,192] or [1,1,H*192]");
+ TORCH_CHECK(k.dim()==3&&v.dim()==3&&k.size(1)==1&&k.size(2)==192&&v.size(1)==1&&v.size(2)==128&&k.size(0)==v.size(0)&&k.size(0)>0&&k.size(0)%128==0&&k.size(0)<=INT32_MAX/192,"SWA128 flat KV geometry invalid");
+ TORCH_CHECK(p.dim()==1&&(window?p.numel()>0&&p.numel()<=INT32_MAX:p.numel()==2)&&st.sizes()==p.sizes()&&(pos.dim()==1||(window&&pos.dim()==2))&&pos.numel()==1&&sink.dim()==1&&sink.numel()==h,"SWA128 page/sink geometry invalid");
+ TORCH_CHECK(std::isfinite(scale)&&std::isfinite(float(scale))&&float(scale)>0,"SWA128 scale invalid");return {{at::kBFloat16,{1,h,128}}};
+}
+Meta meta(const at::Stack&s){return metadata(s,false);}
+Meta window_meta(const at::Stack&s){return metadata(s,true);}
+std::shared_ptr<void> params(const at::Stack&s,size_t&size){size=4;return std::make_shared<float>(s[7].toDouble());}
+
+std::vector<Tensor> execute(Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale,const char*name){at::Stack s={q,k,v,p,st,pos,sink,scale};window_meta(s);TORCH_CHECK(q.device().type()==at::kHPU,"HPU required");auto d=habana::custom_op::UserCustomOpDescriptor::getUserCustomOpDescriptor(name);return d.execute(s);}
+Meta debug_meta(const at::Stack&s){auto m=window_meta(s);m.push_back({at::kFloat,m[0].shape});return m;}
+Tensor fake(Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){auto m=window_meta({q,k,v,p,st,pos,sink,scale});return at::empty(m[0].shape,q.options());}
+std::tuple<Tensor,Tensor> fake_debug(Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){return {fake(q,k,v,p,st,pos,sink,scale),at::empty(window_meta({q,k,v,p,st,pos,sink,scale})[0].shape,q.options().dtype(at::kFloat))};}
+}
+TORCH_LIBRARY(gaudi_swa128_ilp,m){
+ m.def("baseline(Tensor q, Tensor k, Tensor v, Tensor pages, Tensor groups, Tensor pos, Tensor sinks, float scale) -> Tensor");habana::custom_op::registerUserCustomOp("gaudi_swa128_ilp::baseline","gk_swa128_ilp_baseline_v0",window_meta,params);
+ m.def("quad(Tensor q, Tensor k, Tensor v, Tensor pages, Tensor groups, Tensor pos, Tensor sinks, float scale) -> Tensor");habana::custom_op::registerUserCustomOp("gaudi_swa128_ilp::quad","gk_swa128_ilp_quad_v0",window_meta,params);
+ m.def("baseline_scores(Tensor q, Tensor k, Tensor v, Tensor pages, Tensor groups, Tensor pos, Tensor sinks, float scale) -> (Tensor, Tensor)");habana::custom_op::registerUserCustomOp("gaudi_swa128_ilp::baseline_scores","gk_swa128_ilp_baseline_scores_v0",debug_meta,params);
+ m.def("quad_scores(Tensor q, Tensor k, Tensor v, Tensor pages, Tensor groups, Tensor pos, Tensor sinks, float scale) -> (Tensor, Tensor)");habana::custom_op::registerUserCustomOp("gaudi_swa128_ilp::quad_scores","gk_swa128_ilp_quad_scores_v0",debug_meta,params);
+}
+TORCH_LIBRARY_IMPL(gaudi_swa128_ilp,HPU,m){
+ m.impl("baseline",[](Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){auto r=execute(q,k,v,p,st,pos,sink,scale,"gaudi_swa128_ilp::baseline");return r[0];});
+ m.impl("quad",[](Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){auto r=execute(q,k,v,p,st,pos,sink,scale,"gaudi_swa128_ilp::quad");return r[0];});
+ m.impl("baseline_scores",[](Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){auto r=execute(q,k,v,p,st,pos,sink,scale,"gaudi_swa128_ilp::baseline_scores");return std::make_tuple(r[0],r[1]);});
+ m.impl("quad_scores",[](Tensor q,Tensor k,Tensor v,Tensor p,Tensor st,Tensor pos,Tensor sink,double scale){auto r=execute(q,k,v,p,st,pos,sink,scale,"gaudi_swa128_ilp::quad_scores");return std::make_tuple(r[0],r[1]);});
+}
+TORCH_LIBRARY_IMPL(gaudi_swa128_ilp,Meta,m){
+ m.impl("baseline",fake);
+ m.impl("quad",fake);
+ m.impl("baseline_scores",fake_debug);
+ m.impl("quad_scores",fake_debug);
+}

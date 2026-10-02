@@ -1,0 +1,6 @@
+[
+  {"name":"tail-a8","shape":[1,129,129],"activation":"per_block_fp8","quant_gate":true},
+  {"name":"tail-a16","shape":[1,129,129],"activation":"bf16"},
+  {"name":"tail-a16-fast","shape":[3,257,513],"activation":"bf16","scale_math":"bf16"},
+  {"name":"tail-a8-513","shape":[3,257,513],"activation":"per_block_fp8","quant_gate":true}
+]

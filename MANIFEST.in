@@ -1,0 +1,11 @@
+include LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md CONTRIBUTING.md
+recursive-include third_party LICENSE
+recursive-include csrc *.c *.cpp *.h *.hpp *.inc *.s
+recursive-include reference *.py *.c *.cpp *.s *.md *.patch
+recursive-include docs *.md
+recursive-include config *.json
+recursive-include tools *.py *.cpp *.patch
+recursive-include tests *.py
+recursive-include benchmarks *.py *.c *.cpp *.h *.hpp *.s *.md *.json
+recursive-include integrations *.md *.patch
+global-exclude *.pyc *.o *.so __pycache__

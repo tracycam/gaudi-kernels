@@ -1,0 +1,7 @@
+[
+ {"name":"qkv-a16-m513-unsplit","shape":[513,3392,6144],"activation":"bf16","scale_math":"bf16","fixture":"inputs/original-fp8-qkv"},
+ {"name":"qkv-a16-m513-split512","shape":[513,3392,6144],"activation":"bf16","scale_math":"bf16","fixture":"inputs/original-fp8-qkv","row_tile":512},
+ {"name":"quantized-consumer-tail","shape":[3,257,513],"activation":"per_block_fp8","quantized_input":true},
+ {"name":"zero-bias-a8","shape":[2,129,129],"activation":"per_block_fp8","input_fixture":"zero","quant_gate":true},
+ {"name":"cancel-bias-a16","shape":[2,129,129],"activation":"bf16","scale_math":"bf16","input_fixture":"cancellation"}
+]

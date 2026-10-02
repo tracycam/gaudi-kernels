@@ -1,0 +1,41 @@
+[
+  {
+    "name": "qkv-block-a8-m2",
+    "shape": [
+      2,
+      3392,
+      6144
+    ],
+    "activation": "per_block_fp8",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "quant_gate": true,
+    "repeats": 8
+  },
+  {
+    "name": "qkv-block-a8-m8",
+    "shape": [
+      8,
+      3392,
+      6144
+    ],
+    "activation": "per_block_fp8",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "quant_gate": true,
+    "repeats": 8
+  },
+  {
+    "name": "qkv-block-a8-m16",
+    "shape": [
+      16,
+      3392,
+      6144
+    ],
+    "activation": "per_block_fp8",
+    "scale_math": "fp32",
+    "fixture": "inputs/original-fp8-qkv",
+    "quant_gate": true,
+    "repeats": 8
+  }
+]

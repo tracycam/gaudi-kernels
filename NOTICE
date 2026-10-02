@@ -1,0 +1,10 @@
+gaudi-kernels
+Copyright 2026 gaudi-kernels contributors
+
+This project contains original code and references derived from Apache-2.0
+licensed projects, including 1CatAI/1cat-vllm-gaudi and vLLM-Gaudi.
+Existing third-party copyright and attribution notices are preserved.
+See THIRD_PARTY_NOTICES.md for component attribution and scope.
+
+Intel and Gaudi names identify compatible hardware or dependencies and do not
+imply affiliation, sponsorship, or endorsement.

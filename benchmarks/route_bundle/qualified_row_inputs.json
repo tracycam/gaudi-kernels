@@ -1,0 +1,79 @@
+{
+  "core": {
+    "library_sha256": "5fd5b7c5b401e5b6de1f3f5d5e4b0c6448a8921da6a512ffa1878d912f0af055",
+    "canonical_library": "artifacts/builds/route-decode-unroll/sealed-a/target/builds/u4/libmxfp4_moe_graph_tpc.so",
+    "elfs": {
+      "graph_count": {
+        "elf_sha256": "651d4f9b5d9b158744eb2c93f54a422b2baa216c22701c17d0bcfedd25cf8626",
+        "bytes": 10468
+      },
+      "graph_plan": {
+        "elf_sha256": "60c22a0736632a9ce3b1db925420ac87763ea6009596f7f6ee36f52219bda5bd",
+        "bytes": 16548
+      },
+      "graph_gather": {
+        "elf_sha256": "5e527e2474fcbc9ccb435458067f290de8e2c871e1b6a666b73575c9c0ece2aa",
+        "bytes": 13944
+      },
+      "graph_decode": {
+        "elf_sha256": "3798eed5542037c412249add70cefa2ac3fe6f17a40e60cd8aac4f2c6a5c70f9",
+        "bytes": 22620
+      },
+      "graph_gate_rows": {
+        "elf_sha256": "51aef2f457d4492584e47811e5a0ba139f4f977e72ae36d1a4c181fb12082a38",
+        "bytes": 34256
+      },
+      "graph_combine": {
+        "elf_sha256": "619fdf63d146d2732e497e7f40638585dbe87c94a11917237b4c36bae381c1e3",
+        "bytes": 13664
+      },
+      "graph_literal_gate": {
+        "elf_sha256": "fcc6e4bcb9f22d93ac699d2a2761dfd64825760a5def04d399af642a218446f4",
+        "bytes": 32500
+      }
+    }
+  },
+  "metadata": {
+    "library_sha256": "5ea38336751a60d688b8daff9f46cb488dc1f04865378a2d9ab60bfc24fcd317",
+    "canonical_library": "artifacts/builds/route-decode-unroll/sealed-a/remote/libraries/libgaudi_route_metadata_v3_tpc.so",
+    "elfs": {
+      "count": {
+        "elf_sha256": "7acb75c7ccb5030e6b94a95478f7e6e42b5b60719a23bf573940aa5ec5bc6ea4",
+        "bytes": 18316
+      },
+      "prefix": {
+        "elf_sha256": "3e6f9f89e232518025742e1e04d56260f167a372069acb1c2f4fb8fe05b25f01",
+        "bytes": 15808
+      },
+      "inverse": {
+        "elf_sha256": "0b5a781b831e02ccb89397051a1b1d073d9f902239e2598300f49697508630e7",
+        "bytes": 15792
+      },
+      "row_map": {
+        "elf_sha256": "c8dea44f4559a7ea1a4e8aa91a37458daab7bacb8a2d5031e406c62807b0af6f",
+        "bytes": 12152
+      }
+    }
+  },
+  "tiles": {
+    "library_sha256": "22dc3a89af29d441c16e0664dcda9094a22bdcb19affc08f8ef430444eceee46",
+    "canonical_library": "artifacts/builds/route-gather-row-first/sealed-a/builds/row-a/libgaudi_route_tiles_tpc.so",
+    "glue_defines": [
+      "GK_ROUTE_GATHER_ROW_FIRST=1"
+    ],
+    "elfs": {
+      "gather": {
+        "elf_sha256": "eaab76a2d3dfeefb9c718121abc70a619f2a3ea1ea89a008bce2800c4b5a3800",
+        "bytes": 14412
+      },
+      "gate": {
+        "elf_sha256": "ecbbed6bfc99a4abe7c02d58470fd927a7614649351d61e84eba06258b821b79",
+        "bytes": 33756
+      },
+      "combine": {
+        "elf_sha256": "0dc9a3e75734585de054eff160abed837087120221dc6295e6f1ecafcf1dcafe",
+        "bytes": 12960
+      }
+    }
+  }
+}

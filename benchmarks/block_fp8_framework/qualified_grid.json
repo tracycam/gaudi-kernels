@@ -1,0 +1,108 @@
+[
+  {
+    "name": "qkv-a8-m1",
+    "shape": [
+      1,
+      3392,
+      6144
+    ],
+    "activation": "per_block_fp8",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "qkv-a8-m16",
+    "shape": [
+      16,
+      3392,
+      6144
+    ],
+    "activation": "per_block_fp8",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "qkv-a16-m1",
+    "shape": [
+      1,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "qkv-a16-m64",
+    "shape": [
+      64,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "qkv-a16-m512",
+    "shape": [
+      512,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "qkv-a16-m513",
+    "shape": [
+      513,
+      3392,
+      6144
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "fixture": "inputs/original-fp8-qkv"
+  },
+  {
+    "name": "chain-a8-m1",
+    "shape": [
+      1,
+      1024,
+      1024
+    ],
+    "activation": "per_block_fp8",
+    "depth": 2
+  },
+  {
+    "name": "chain-a16-m64",
+    "shape": [
+      64,
+      1024,
+      1024
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "depth": 2
+  },
+  {
+    "name": "chain-a16-m513",
+    "shape": [
+      513,
+      1024,
+      1024
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16",
+    "depth": 2
+  },
+  {
+    "name": "stream-a16-m1",
+    "shape": [
+      1,
+      8192,
+      8192
+    ],
+    "activation": "bf16",
+    "scale_math": "bf16"
+  }
+]

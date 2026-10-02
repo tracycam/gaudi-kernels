@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "model": "mimo-v2.6-pro",
+  "parallel": {
+    "tp": 8,
+    "ep": 1
+  },
+  "precision_contract": "fp32_arithmetic_v1",
+  "decode": {
+    "qkv": {
+      "impl": "block_fp8_a16",
+      "core": "native_lanes_v1",
+      "a8_max_rows": 0,
+      "reduce": "sequential",
+      "post": "vendor"
+    },
+    "norm": {
+      "impl": "fp32"
+    },
+    "attention": {
+      "swa": "vendor",
+      "full": "vendor_sdpa"
+    },
+    "moe": {
+      "router": {
+        "post": "vendor"
+      },
+      "gate_up": {
+        "impl": "legacy"
+      },
+      "down": {
+        "impl": "legacy"
+      },
+      "combine": {
+        "sum_dtype": "fp32"
+      },
+      "dispatch": {
+        "compact_rows": [
+          1
+        ]
+      }
+    },
+    "tp_reduce": {
+      "collective": "baseline"
+    }
+  },
+  "runtime": {
+    "executor": "legacy_native",
+    "flights": 1,
+    "buckets": {
+      "batch": [
+        1
+      ],
+      "tokens": [
+        1
+      ]
+    }
+  },
+  "diagnostics": {
+    "profile": false,
+    "layer_hashes": false,
+    "same_input_audit": false
+  }
+}
