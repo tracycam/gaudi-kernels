@@ -53,10 +53,14 @@ class PackedTargetExecutor:
                 hidden = self.model(input_ids=ids, positions=flat_positions)
                 if isinstance(hidden, tuple):
                     hidden = hidden[0]
+                # Framework/collective outputs can be reusable buffers. Keep
+                # this result independent of the next forward, including one
+                # from another executor sharing the loaded model.
+                hidden = hidden.clone()
                 logits = None
                 if batch.logits_indices:
                     indices = torch.tensor(batch.logits_indices, dtype=torch.int64, device=self.runner.device)
-                    logits = self.model.compute_logits(hidden.index_select(0, indices))
+                    logits = self.model.compute_logits(hidden.index_select(0, indices)).clone()
             htcore.mark_step()
             torch.hpu.synchronize()
             return PackedTargetResult(hidden, logits, batch.logits_owners, metadata)
