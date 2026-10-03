@@ -26,6 +26,9 @@ separately under the user's deferred-precision rule. Serving speculative
 admission remains closed for allocator/lifetime/full-cycle work, rather than
 requiring FP64 agreement. A DFlash proposal-position bug was found and fixed;
 the earlier zero-acceptance smoke result is not a valid drafter assessment.
+The corrected real4K,T4 smoke emitted21 tokens in eight cycles (tau2.625), with
+all TP ranks agreeing. Eager cycle median345.76ms remains diagnostic overhead;
+there is still no native full-cycle service TPS result.
 
 The multi-request generation test used a private 4K code-review corpus, greedy
 sampling, and a 96-token output budget. The common decode window begins after

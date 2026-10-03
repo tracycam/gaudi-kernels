@@ -96,6 +96,7 @@ private payloads and deployment manifests are not published.
 | R / `bd427e1` | Connected native SWA, two layers | All-query, continuation, features and three advancing replays passed on eight ranks |
 | S70 / `3dad706` |70-layer native SWA and advancing target replay | Functional checks and three same-program byte-exact replays passed on eight ranks;286 SDK submissions, retained storage released |
 | S70 / `3dad706` | Actual five-layer DFlash plus70-layer target,4K context | Four eager cycles passed finite/live-KV checks but accepted no drafts; subsequent audit found proposal-position wiring bug |
+| T70 / `d7e9782` | Corrected real DFlash proposal alignment,4086-token context,T4 | Eight eager cycles passed on all ranks; emitted counts1/1/4/4/4/2/1/4, mean2.625; eight ranks emitted identical IDs |
 
 The SDK counts describe different capture scopes, not a paired speedup. Neither
 count means one recipe or one hardware launch. No new full-model TPS, physical
@@ -123,7 +124,18 @@ that offset and applies the LM head only to the valid proposal rows. The
 regression fixture now models a same-position denoiser, so the old wiring fails
 it. The matching local SGLang source was pinned at
 `f748ae35a26fbe1be98db09967ffb828658b821a`. The initial zero-acceptance result
-must not be used to judge checkpoint acceptance; corrected device runs follow.
+must not be used to judge checkpoint acceptance. The corrected T70 run did
+accept drafts, retaining actual proposal/target-next-token witnesses. Eight
+cycles on one prompt are a functional smoke sample, not a representative
+acceptance evaluation. At the observed tau2.625,170 TPS requires a complete
+cycle no slower than15.44ms. The eager diagnostic median was345.76ms, so no
+service speedup is claimed.
+
+An independent offline FP32 scores/softmax/AV calculation inspected16 native
+SWA operand witnesses from eight ranks, covering200 queries. All were finite;
+the maximum relative L2 against the stored native output was0.001732. This
+uses BF16-stored Q/K/V and reconstructs causal/window visibility independently
+from the page descriptors; it is not a full-model quality gate.
 
 At133 rows the existing QKV policy selects BF16 activation arithmetic, whereas
 token-at-a-time execution selects block-A8. That is a deliberate policy difference,
