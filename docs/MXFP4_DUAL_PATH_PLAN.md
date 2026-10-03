@@ -66,6 +66,14 @@ scale silently. Never materialize all G*M*N partials in HBM. Report additional
 native-representation error separately from the intended MXFP8 quantization
 error. The supplied CPU reference does not mandate a bitwise reduction tree.
 
+Before building the FP8 full chain, measure the scale-accumulator throughput.
+For E8/M1024/N512/K6144 there are805,306,368 K32 output partials, or3GiB if
+materialized as FP32. Streaming removes that HBM allocation but not the scale
+arithmetic or producer/consumer dependencies. Since BF16 already measures
+387TFLOPS for this projection, raw FP8 MME peak alone cannot predict a gain.
+Benchmark quantization, native-format adaptation and streamed accumulation
+together; retain both user-visible policies without asserting W4A8 always wins.
+
 ## Storage and bandwidth accounting
 
 Persistent prepack may permute weight bytes/scales without increasing their
