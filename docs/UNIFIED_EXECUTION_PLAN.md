@@ -1,6 +1,8 @@
 # Unified execution implementation plan
 
-Status: implementation started; device/model completion is recorded separately.
+Status: first protocol checkpoint tested. See
+[checkpoint evidence and remaining work](UNIFIED_EXECUTION_CHECKPOINT.md).
+Device/model completion is recorded separately.
 Baseline: public source commit `656b6f7`, development model baseline `a999894`.
 
 ## Objective and ownership
@@ -23,9 +25,9 @@ remain outside plugin patches and outside public experiment payloads.
 
 | ID | Implement | Evidence required | Current status |
 |---|---|---|---|
-| C1 | Packed TokenBatch, output ownership, capability/capacity checks, vLLM scheduler adapter | [1,4,128] occupies133 valid rows, ragged/reordered/page-boundary checks, no private model dimensions | In progress |
-| C2 | KV view/write staging and explicit computed/committed/emitted results | No live KV overwrite, prefix-only commit, reject/abort/EOS/budget ownership, continued attention after rejection | Not complete |
-| C3 | Target-only mixed layer and model execution | Every request/query compared; padding excluded; regular and sliding-window causal visibility | Not complete |
+| C1 | Packed TokenBatch, output ownership, capability/capacity checks, vLLM scheduler adapter | [1,4,128] occupies133 valid rows, ragged/reordered/page-boundary checks, no private model dimensions | Protocol and source adapter tested; production packed consumption pending |
+| C2 | KV view/write staging and explicit computed/committed/emitted results | No live KV overwrite, prefix-only commit, reject/abort/EOS/budget ownership, continued attention after rejection | Descriptors tested; actual page promotion/event transaction pending |
+| C3 | Target-only mixed layer and model execution | Every request/query compared; padding excluded; regular and sliding-window causal visibility | Minimal BF16 layer tested on HPU; actual compact model forward pending |
 | C4 | Native packed target runtime | Replay same capacity without request-ID recompilation, validate-before-mutation, partial failure invalidates plan, clean teardown | Not complete |
 | C5 | Complete NextN cycle, then DFlash using same target/KV interface | Actual accepted prefixes and full answers; all rejection paths; full-cycle TPS and conditional acceptance | Not complete |
 | C6 | Expert-M dispatch, tiled KV reuse, fusion and explicit layer plans | Complete consuming-chain A/B, real route distributions, cold working set, physical traffic where observable | Not complete |
