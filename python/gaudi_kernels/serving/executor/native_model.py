@@ -32,6 +32,12 @@ class NativeExpertTP(torch.nn.Module):
         return output
 
     def _grouped_forward(self, x, ids, routing):
+        if torch.hpu.is_current_stream_capturing():
+            # An enclosing model graph already removes construction overhead.
+            # Append operators to that graph instead of attempting nested capture.
+            from .grouped_moe_runtime import forward
+            return forward(x, ids, routing, self.gp, self.gs, self.dp, self.ds,
+                           self.table, self.directions)
         if self._grouped_graph is None:
             from .grouped_moe import GroupedMoE
             # Weight owners stay bound to this layer; graph replay only binds
