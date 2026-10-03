@@ -54,13 +54,14 @@ class ScheduledKVBinding:
                 query_positions.append(torch.arange(request.start_position, end, device=runner.device))
             if len(set(writes)) != len(writes) or set(writes) & past_slots:
                 raise ValueError('Scheduled writes alias live KV or another request')
+            largest_slot = max(all_slots)
             slot_mapping = torch.tensor(writes, device=runner.device, dtype=torch.int64)
             for name in group.layer_names:
                 layer = layers[name]
                 cache = layer.kv_cache
                 if (not isinstance(cache, tuple) or len(cache) < 2 or
                         any(value.dtype != torch.bfloat16 or value.ndim != 3 for value in cache[:2]) or
-                        any(slot >= cache[0].shape[0] or slot >= cache[1].shape[0] for slot in all_slots)):
+                        largest_slot >= min(cache[0].shape[0], cache[1].shape[0])):
                     raise ValueError('Unsupported allocator KV layout or physical slot')
                 owner = SimpleNamespace(caches={name: cache[:2]}, pending=None)
                 metadata = PackedAttentionMetadata(batch, owner, tuple(candidates), slot_mapping,
@@ -116,6 +117,9 @@ def sample_scheduled(runner, grammar_output):
     runner.warmup_mode = False
     output = [[] for _ in range(runner.input_batch.num_reqs)]
     try:
+        records = runner._packed_scheduled_records
+        if len(records) >= 512:
+            raise ValueError('Packed scheduled diagnostic capacity exhausted')
         executor = PackedTargetExecutor(runner, session=ScheduledKVBinding(runner))
         target = executor.execute(batch)
         owners = [rid for rid, _ in target.output_owners]
@@ -127,20 +131,22 @@ def sample_scheduled(runner, grammar_output):
                 raise ValueError('Sampler output ownership mismatch')
             for rid, token in zip(owners, ids):
                 output[runner.input_batch.req_id_to_index[rid]] = [token]
-        executor.commit(target, batch.query_lengths)
+        updates = []
         for index, rid in enumerate(runner.input_batch.req_ids[:runner.input_batch.num_reqs]):
             tokens = output[index]
             start = int(runner.input_batch.num_tokens_no_spec[index])
             end = start + len(tokens)
             if end > runner.max_model_len + 1:
                 raise ValueError('Sampled output exceeds request storage')
+            if any(type(token) is not int or not 0 <= token < runner.input_batch.vocab_size for token in tokens):
+                raise ValueError('Invalid sampled token ID')
+            updates.append((index, rid, start, end, tokens))
+        executor.commit(target, batch.query_lengths)
+        for index, rid, start, end, tokens in updates:
             runner.input_batch.token_ids_cpu[index, start:end] = tokens
             runner.input_batch.num_tokens_no_spec[index] = end
             runner.input_batch.num_tokens[index] = end
             runner.requests[rid].output_token_ids.extend(tokens)
-        records = runner._packed_scheduled_records
-        if len(records) >= 512:
-            raise ValueError('Packed scheduled diagnostic capacity exhausted')
         record = {'request_ids': batch.request_ids, 'query_lengths': batch.query_lengths,
                   'valid_rows': batch.num_tokens, 'kinds': [r.kind for r in batch.requests],
                   'positions': batch.encoded()['positions'], 'input_ids': batch.encoded()['token_ids'],

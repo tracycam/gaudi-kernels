@@ -62,15 +62,20 @@ def main():
                               'commits': [4, 4, 4], 'prefix_tokens': [p['prompt_token_ids'] for p in prompts],
                               'query_tokens': [[row['token'] for row in values] for values in rows],
                               'serving_rows': [row for values in rows for row in values]})
-    result = {'layers': args.layers, 'plan': plan, 'scope': 'real weights; target-only; not full model quality or throughput'}
+    result = {'layers': args.layers, 'plan': plan, 'pass': False, 'status': 'RUNNING',
+              'scope': 'real weights; target-only; not full model quality or throughput'}
     try:
         result['ranks'] = llm.collective_rpc('packed_target_probe', args=(plan,))
-        result['pass'] = len(result['ranks']) == 8 and all(rank['pass'] for rank in result['ranks'])
-        if not result['pass']:
+        result['target_pass'] = len(result['ranks']) == 8 and all(rank['pass'] for rank in result['ranks'])
+        if not result['target_pass']:
             raise RuntimeError('Packed target all-query or continuation gate failed')
         if args.scheduled_serving:
             from tools.validation.executor.packed_serving_check import run
             result['scheduled_serving'] = run(llm, args.out)
+        result.update({'pass': True, 'status': 'COMPLETE'})
+    except BaseException as error:
+        result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})
+        raise
     finally:
         (args.out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
 
