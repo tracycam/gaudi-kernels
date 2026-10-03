@@ -8,6 +8,7 @@ class ExpertBucket:
     upper: int
     rows: int
     slots: int
+    fallback_overflow: bool = False
 
 
 @dataclass(frozen=True)
@@ -15,21 +16,27 @@ class ExpertPlan:
     min_mme_rows: int = 64
     down_n_tile: int = 2048
     workspace_budget: int = 1024 * 1024**2
+    max_slots_per_bucket: int = 0
+    row_caps: tuple = ()
 
     def buckets(self, tokens, routes, experts):
         if any(type(v) is not int for v in
-               (tokens,routes,experts,self.min_mme_rows,self.down_n_tile,self.workspace_budget)):
+               (tokens,routes,experts,self.min_mme_rows,self.down_n_tile,self.workspace_budget,self.max_slots_per_bucket)):
             raise ValueError('integer expert-plan geometry required')
         if not (0 <= tokens <= 513 and 1 <= routes <= min(8,experts)
                 and 1 <= experts <= 384 and self.min_mme_rows >= 1
                 and self.down_n_tile in (512,1024,2048) and self.workspace_budget > 0):
             raise ValueError('unqualified expert-plan geometry')
+        if self.max_slots_per_bucket<0 or type(self.row_caps) is not tuple or any(type(v) is not int or v<self.min_mme_rows or v>tokens for v in self.row_caps) or tuple(sorted(set(self.row_caps)))!=self.row_caps:
+            raise ValueError('ordered row capacities and nonnegative slot limit required')
         result = []
         lower = self.min_mme_rows
         cap = 1 << (lower-1).bit_length()
         while lower <= tokens:
-            upper = min(cap,tokens)
-            result.append(ExpertBucket(lower,upper,upper,min(experts,tokens*routes//lower)))
+            upper = min(cap,tokens) if not self.row_caps else next((v for v in self.row_caps if v>=lower),tokens)
+            slots=min(experts,tokens*routes//lower)
+            if self.max_slots_per_bucket:slots=min(slots,self.max_slots_per_bucket)
+            result.append(ExpertBucket(lower,upper,upper,slots,bool(self.max_slots_per_bucket)))
             lower,cap = upper+1,cap*2
         return tuple(result)
 
@@ -64,7 +71,8 @@ def reference_partition(ids, experts, bucket):
     for f in flags:bad|=f
     if sum(counts)!=t*r or any(n>t for n in counts):bad|=8
     selected=[e for e,n in enumerate(counts) if bucket.lower<=n<=bucket.upper]
-    if len(selected)>bucket.slots:bad|=4
+    if len(selected)>bucket.slots and not bucket.fallback_overflow:bad|=4
+    selected=selected[:bucket.slots]
     prefix=[0]*(experts+1); inverse=[-1]*(t*r)
     mapping=[-1]*(bucket.slots*bucket.rows); chosen=[-1]*bucket.slots;valid=[0]*bucket.slots
     cursor=0

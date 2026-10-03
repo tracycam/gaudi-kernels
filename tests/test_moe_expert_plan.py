@@ -43,3 +43,18 @@ class ExpertPlanTests(unittest.TestCase):
         self.assertFalse(ExpertPlan(1,workspace_budget=1).costs(512,8,384)['fits_budget'])
         for t in (-1,514,True):
             with self.assertRaises(ValueError):ExpertPlan().buckets(t,8,384)
+
+    def test_bounded_capacity_falls_back_without_losing_routes(self):
+        rng=random.Random(92)
+        for t in (32,128,512):
+            ids=[rng.sample(range(32),8) for _ in range(t)]
+            for cap in (1,4,8):
+                plan=ExpertPlan(2,max_slots_per_bucket=cap,row_caps=(t,))
+                bucket,=plan.buckets(t,8,32)
+                ref=reference_partition(ids,32,bucket)
+                self.assertEqual(ref['status'],[0])
+                selected=set(x for x in ref['tile_expert'] if x>=0)
+                self.assertLessEqual(len(selected),cap)
+                for q,e in enumerate(x for row in ids for x in row):
+                    self.assertEqual(ref['inverse'][q]>=0,e in selected)
+                self.assertEqual(sum(ref['valid_rows']),sum(n for e,n in enumerate(ref['counts']) if e in selected))

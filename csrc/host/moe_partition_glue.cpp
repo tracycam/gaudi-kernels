@@ -17,17 +17,17 @@ template<class T>void map(T&p,int d,int i,int a,int hi){p.mapping[d].indexSpaceD
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId d,uint32_t*n,GuidInfo*g){unsigned cap=*n;*n=d==DEVICE_ID_GAUDI2?7:0;if(g)for(unsigned i=0;i<std::min(cap,*n);++i)std::strcpy(g[i].name,names[i]);return GLUE_SUCCESS;}
 extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKernelInstantiation*out){
  int id=which(in->guid.name);if(id<0)return GLUE_NODE_NOT_FOUND;
- const unsigned ni[]={2,5,3,3,3,4,4},no[]={5,1,1,1,1,1,1},np[]={5,2,1,3,1,0,4};
+ const unsigned ni[]={2,5,3,3,3,4,4},no[]={5,1,1,1,1,1,1},np[]={6,2,1,3,1,0,4};
  if(in->inputTensorNr!=ni[id]||in->outputTensorNr!=no[id])return GLUE_INCOMPATIBLE_INPUT_COUNT;
  if(in->nodeParams.nodeParamsSize!=np[id]*4||(np[id]&&!in->nodeParams.nodeParams))return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
- int p[5]={};if(np[id])std::memcpy(p,in->nodeParams.nodeParams,np[id]*4);
+ int p[6]={};if(np[id])std::memcpy(p,in->nodeParams.nodeParams,np[id]*4);
  for(unsigned i=0;i<ni[id]+no[id];++i){auto&g=(i<ni[id]?in->inputTensors[i]:in->outputTensors[i-ni[id]]).geometry;
   if(g.dims<1||g.dims>3)return GLUE_INCOMPATIBLE_INPUT_SIZE;
   for(unsigned d=0;d<g.dims;++d)if(!g.maxSizes[d]||g.maxSizes[d]>513ull*8*6144||g.minSizes[d]!=g.maxSizes[d])return GLUE_INCOMPATIBLE_INPUT_SIZE;
  }
  auto*x=in->inputTensors;auto*y=in->outputTensors;bool good=false;unsigned tasks=0;
  if(id==0){unsigned e=x[0].geometry.maxSizes[0],t=x[1].geometry.maxSizes[0];int r=p[0],c=p[1],b=p[2];
-  good=e<=384&&t<=513&&r>=1&&r<=8&&e>=unsigned(r)&&c>=1&&c<=int(t)&&b>=1&&b<=int(e)&&p[3]>=1&&p[3]<=p[4]&&p[4]<=c&&shape(x[0],DATA_I32,{e})&&shape(x[1],DATA_I32,{t})&&shape(y[0],DATA_I32,{e+1})&&shape(y[1],DATA_I32,{unsigned(b)})&&shape(y[2],DATA_I32,{unsigned(b)})&&shape(y[3],DATA_I32,{unsigned(b)})&&shape(y[4],DATA_I32,{1});tasks=1;
+  good=e<=384&&t<=513&&r>=1&&r<=8&&e>=unsigned(r)&&c>=1&&c<=int(t)&&b>=1&&b<=int(e)&&p[3]>=1&&p[3]<=p[4]&&p[4]<=c&&p[5]>=0&&p[5]<=1&&shape(x[0],DATA_I32,{e})&&shape(x[1],DATA_I32,{t})&&shape(y[0],DATA_I32,{e+1})&&shape(y[1],DATA_I32,{unsigned(b)})&&shape(y[2],DATA_I32,{unsigned(b)})&&shape(y[3],DATA_I32,{unsigned(b)})&&shape(y[4],DATA_I32,{1});tasks=1;
  }else if(id==1){unsigned r=x[0].geometry.maxSizes[0],t=x[0].geometry.maxSizes[1],e=x[2].geometry.maxSizes[0]-1,c=p[0],b=p[1];
   good=t<=513&&r<=8&&e>=r&&e<=384&&c>=1&&c<=t&&b>=1&&b<=e&&shape(x[0],DATA_I32,{r,t})&&shape(x[1],DATA_I32,{r*t})&&shape(x[2],DATA_I32,{e+1})&&shape(x[3],DATA_I32,{1})&&shape(x[4],DATA_I32,{(r*t+63)/64+1,e})&&shape(y[0],DATA_I32,{r*t});tasks=r*t;
  }else if(id==2){unsigned length=x[0].geometry.maxSizes[0],b=x[1].geometry.maxSizes[0],c=p[0];

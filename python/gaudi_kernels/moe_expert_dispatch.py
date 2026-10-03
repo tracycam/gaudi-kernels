@@ -43,15 +43,18 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
     # shared by all buckets; no .item(), CPU copy, per-expert host branch or sync.
     buckets=[]
     for b in cost['buckets']:
-        prefix,experts,base,valid,status=op.prefix(counts,flags,r,b.rows,b.slots,b.lower,b.upper)
+        prefix,experts,base,valid,status=op.prefix(counts,flags,r,b.rows,b.slots,b.lower,b.upper,int(b.fallback_overflow))
         inverse=op.inverse(ids,flat,prefix,status,offsets,b.rows,b.slots)
         mapping=op.row_map(inverse,valid,status,b.rows)
         buckets.append((b,experts,valid,status,inverse,mapping))
-    if plan.min_mme_rows==1:
+    if plan.min_mme_rows==1 and not plan.max_slots_per_bucket:
         result=torch.zeros_like(x,dtype=torch.float32)
     else:
-        per_route=counts.index_select(0,flat.clamp(0,e-1)).reshape(ids.shape)
-        small=(per_route<plan.min_mme_rows)&(buckets[0][3]==0)
+        # Selection can deliberately cap capacity. Every unselected route,
+        # including experts overflowing a bucket, must remain owned by TPC.
+        selected=buckets[0][4]>=0
+        for item in buckets[1:]:selected=selected|(item[4]>=0)
+        small=(~selected.reshape(ids.shape))&(buckets[0][3]==0)
         result=tpc(x,ids,routing,gp,gs,down,ds,lut,directions,route_mask=small)
     def decode(w,s,k,n,nt,slot,batch,nb,ids_view):
         if decoder=='historical':return core.decode(w,s,lut,ids_view,k,n,nt,slot,batch,nb,1)

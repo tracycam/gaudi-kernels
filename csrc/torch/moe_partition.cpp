@@ -8,8 +8,8 @@ void tensor(const T&t,at::ScalarType d,int rank){TORCH_CHECK(t.scalar_type()==d&
 void devices(const at::Stack&s){auto d=s[0].toTensor().device();TORCH_CHECK(d.type()==at::kHPU||d.type()==at::kMeta,"HPU/Meta required");for(auto&v:s)if(v.isTensor())TORCH_CHECK(v.toTensor().device()==d,"same device required");}
 void status(const T&t){tensor(t,at::kInt,1);TORCH_CHECK(t.numel()==1,"status[1]");}
 Meta prefix_meta(const at::Stack&s){devices(s);auto n=s[0].toTensor(),f=s[1].toTensor();tensor(n,at::kInt,1);tensor(f,at::kInt,1);
- auto r=s[2].toInt(),c=s[3].toInt(),b=s[4].toInt(),lo=s[5].toInt(),hi=s[6].toInt();
- TORCH_CHECK(r>=1&&r<=8&&n.numel()>=r&&n.numel()<=384&&f.numel()<=513&&c>=1&&c<=f.numel()&&b>=1&&b<=n.numel()&&lo>=1&&lo<=hi&&hi<=c,"bounded expert bucket");
+ auto r=s[2].toInt(),c=s[3].toInt(),b=s[4].toInt(),lo=s[5].toInt(),hi=s[6].toInt(),overflow=s[7].toInt();
+ TORCH_CHECK(r>=1&&r<=8&&n.numel()>=r&&n.numel()<=384&&f.numel()<=513&&c>=1&&c<=f.numel()&&b>=1&&b<=n.numel()&&lo>=1&&lo<=hi&&hi<=c&&overflow>=0&&overflow<=1,"bounded expert bucket");
  return{{at::kInt,{n.numel()+1}},{at::kInt,{b}},{at::kInt,{b}},{at::kInt,{b}},{at::kInt,{1}}};}
 Meta inverse_meta(const at::Stack&s){devices(s);auto x=s[0].toTensor(),f=s[1].toTensor(),p=s[2].toTensor(),off=s[4].toTensor();tensor(x,at::kInt,2);tensor(f,at::kInt,1);tensor(p,at::kInt,1);tensor(off,at::kInt,2);status(s[3].toTensor());auto c=s[5].toInt(),b=s[6].toInt();
  TORCH_CHECK(x.size(0)<=513&&x.size(1)<=8&&p.numel()>=x.size(1)+1&&p.numel()<=385&&f.numel()==x.numel()&&off.size(0)==p.numel()-1&&off.size(1)==(x.numel()+63)/64+1&&c>=1&&c<=x.size(0)&&b>=1&&b<p.numel(),"bucket inverse geometry");return{{at::kInt,{x.numel()}}};}
@@ -25,7 +25,7 @@ Meta decode_meta(const at::Stack&s){devices(s);auto w=s[0].toTensor(),sc=s[1].to
 using Fn=Meta(*)(const at::Stack&);
 V run(const char*name,Fn fn,const at::Stack&s){auto m=fn(s);if(s[0].toTensor().device().type()==at::kMeta){V v;for(auto&o:m)v.push_back(at::empty(o.shape,s[0].toTensor().options().dtype(o.dtype)));return v;}auto op=habana::custom_op::UserCustomOpDescriptor::getUserCustomOpDescriptor(name);return op.execute(s);}
 std::shared_ptr<void> params(const at::Stack&s,size_t&n,int first,int count){n=count*4;auto p=std::shared_ptr<int[]>(new int[count]);for(int i=0;i<count;++i)p[i]=s[first+i].toInt();return std::shared_ptr<void>(p,p.get());}
-auto prefix(T n,T f,int64_t r,int64_t c,int64_t b,int64_t lo,int64_t hi){auto v=run("gaudi_expert_partition::prefix",prefix_meta,{n,f,r,c,b,lo,hi});return std::make_tuple(v[0],v[1],v[2],v[3],v[4]);}
+auto prefix(T n,T f,int64_t r,int64_t c,int64_t b,int64_t lo,int64_t hi,int64_t overflow){auto v=run("gaudi_expert_partition::prefix",prefix_meta,{n,f,r,c,b,lo,hi,overflow});return std::make_tuple(v[0],v[1],v[2],v[3],v[4]);}
 T inverse(T x,T f,T p,T st,T off,int64_t c,int64_t b){return run("gaudi_expert_partition::inverse",inverse_meta,{x,f,p,st,off,c,b})[0];}
 T row_map(T inv,T v,T st,int64_t c){return run("gaudi_expert_partition::row_map",map_meta,{inv,v,st,c})[0];}
 T gather(T x,T map,T st,int64_t r,int64_t c,int64_t slot,int64_t b){return run("gaudi_expert_partition::gather",gather_meta,{x,map,st,r,c,slot,b})[0];}
@@ -35,14 +35,14 @@ T decode(T w,T sc,T lut,T map,int64_t k,int64_t n,int64_t nt,int64_t slot,int64_
 }
 TORCH_LIBRARY(gaudi_expert_partition,m){
  m.def("decode(Tensor packed, Tensor scales, Tensor lut, Tensor expert_map, int k, int n, int n_tile, int slot_begin, int batch, int n_begin, int empty_mode) -> Tensor");
- m.def("prefix(Tensor counts, Tensor flags, int routes, int rows, int slots, int lower, int upper) -> (Tensor,Tensor,Tensor,Tensor,Tensor)");
+ m.def("prefix(Tensor counts, Tensor flags, int routes, int rows, int slots, int lower, int upper, int overflow_to_tpc) -> (Tensor,Tensor,Tensor,Tensor,Tensor)");
  m.def("inverse(Tensor ids, Tensor flat_ids, Tensor prefix, Tensor status, Tensor offsets, int rows, int slots) -> Tensor");
  m.def("row_map(Tensor inverse, Tensor valid_rows, Tensor status, int rows) -> Tensor");
  m.def("gather(Tensor x, Tensor row_map, Tensor status, int routes, int rows, int slot, int batch) -> Tensor");
  m.def("gate(Tensor partial, Tensor valid_rows, Tensor status, int slot) -> Tensor");
  m.def("combine(Tensor partial, Tensor routing, Tensor inverse, Tensor status) -> Tensor");
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::decode","gk_expert_decode_k8",decode_meta,[](const at::Stack&s,size_t&n){n=16;auto p=std::shared_ptr<int[]>(new int[4]);p[0]=s[5].toInt()/512;p[1]=s[7].toInt();p[2]=s[9].toInt()/512;p[3]=s[10].toInt();return std::shared_ptr<void>(p,p.get());});
- habana::custom_op::registerUserCustomOp("gaudi_expert_partition::prefix","gk_expert_prefix",prefix_meta,[](const at::Stack&s,size_t&n){return params(s,n,2,5);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::prefix","gk_expert_prefix",prefix_meta,[](const at::Stack&s,size_t&n){return params(s,n,2,6);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::inverse","gk_expert_inverse",inverse_meta,[](const at::Stack&s,size_t&n){return params(s,n,5,2);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::row_map","gk_expert_map",map_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,1);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::gather","gk_expert_gather",gather_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,3);});
