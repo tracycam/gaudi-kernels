@@ -102,7 +102,8 @@ def moe(x, ids, routing, gp, gs, dp, ds, table, directions, *, mode='broadcast',
     routing = routing.to(torch.float32 if precise else torch.bfloat16).clone()
     if mode == 'compact':
         if _GP_POLICY == 'vector_fetch_scale_tail':
-            if x.shape[0] > 8 or ids.shape[1] != 8:
+            from gaudi_kernels.serving.executor.moe_dispatch_runtime import scale_tail_row_allowed
+            if not scale_tail_row_allowed(x.shape[0]) or ids.shape[1] != 8:
                 raise ValueError('GP scale-tail is qualified for compact rows<=8 and top8 only')
             from gaudi_kernels.serving.executor.gp_scale_tail_runtime import operator
             gp_call = operator()

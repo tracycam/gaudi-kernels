@@ -9,6 +9,18 @@ import time
 
 
 def on_worker(worker, plan):
+    if plan.get('compact_row_diagnostic', False):
+        from gaudi_kernels.engine.context import context
+        from gaudi_kernels.serving.executor.moe_dispatch_runtime import diagnostic_compact_rows
+        if (worker.model_runner.input_batch.num_reqs or context().native.active or
+                len(plan['prompt_ids'])*plan['verify_rows'] != 12):
+            raise ValueError('Private12-row MoE cycle experiment requires idle workers')
+        with diagnostic_compact_rows((12,)):
+            return _on_worker(worker, plan)
+    return _on_worker(worker, plan)
+
+
+def _on_worker(worker, plan):
     import torch
     import torch.distributed as dist
     import habana_frameworks.torch.core as htcore
@@ -88,6 +100,7 @@ def on_worker(worker, plan):
               'proposal_hidden_positions': list(range(1, extent)),
               'static_page_bindings': target.session.static_pages,
               'fold_gqa_heads': draft.fold_gqa,
+              'compact_row_diagnostic': plan.get('compact_row_diagnostic', False),
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     recorded = bool(plan.get('record_cycle', False))

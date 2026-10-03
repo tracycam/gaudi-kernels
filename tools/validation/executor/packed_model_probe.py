@@ -51,6 +51,8 @@ def main():
                    help='Attempt direct Synapse rank0 trace on recorded cycle4; profiling is diagnostic only')
     p.add_argument('--cycle-gqa-sweep', nargs='+', choices=('broadcast', 'folded'),
                    help='Compare shared-KV batch broadcasting with query heads folded into M')
+    p.add_argument('--cycle-moe-sweep', nargs='+', choices=('production', 'compact12'),
+                   help='Private B3T4 cycle ABBA; compact12 never changes serving admission')
     args = p.parse_args()
     if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
         p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
@@ -58,8 +60,10 @@ def main():
         p.error('Cycle recording requires --dflash-cycle and at least three cycles')
     if args.profile_dflash_cycle and (not args.record_dflash_cycle or args.cycle_steps < 5):
         p.error('Cycle profiling requires recording and at least five cycles')
-    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep) and not args.dflash_cycle:
+    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep) and not args.dflash_cycle:
         p.error('Cycle sweeps require --dflash-cycle')
+    if args.cycle_moe_sweep and (args.cycle_batch_sweep != [3] or args.cycle_row_sweep != [4]):
+        p.error('Private compact12 paired cycles require --cycle-batch-sweep3 --cycle-row-sweep4')
     if args.dflash_cycle:
         prompts = json.loads(args.cycle_prompts.read_text())
         if args.cycle_batch_sweep and max(args.cycle_batch_sweep) > len(prompts):
@@ -150,12 +154,13 @@ def main():
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
         if args.dflash_cycle:
-            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep
+            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep
             result['dflash_sweep'] = []
             for batch in args.cycle_batch_sweep or (len(prompts),):
-                for extent, binding_mode, gqa in ((n, mode, g) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
+                for extent, binding_mode, gqa, moe_index, moe_mode in ((n, mode, g, i, m) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
                                                   for mode in args.cycle_binding_sweep or ('static',)
-                                                  for g in args.cycle_gqa_sweep or ('broadcast',)):
+                                                  for g in args.cycle_gqa_sweep or ('broadcast',)
+                                                  for i, m in enumerate(args.cycle_moe_sweep or ('production',))):
                     cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts[:batch]],
                                   'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
                                   'cycles': args.cycle_steps, 'verify_rows': extent,
@@ -163,13 +168,15 @@ def main():
                                   'static_pages': binding_mode == 'static',
                                   'profile': args.profile_dflash_cycle,
                                   'fold_gqa': gqa == 'folded',
+                                  'compact_row_diagnostic': moe_mode == 'compact12',
                                   'label': (f'dflash-b{batch}-t{extent}' +
                                             (f'-{binding_mode}' if args.cycle_binding_sweep else '')+
-                                            (f'-gqa-{gqa}' if args.cycle_gqa_sweep else '')) if sweep else 'dflash-target-cycle'}
+                                            (f'-gqa-{gqa}' if args.cycle_gqa_sweep else '')+
+                                            (f'-moe{moe_index}-{moe_mode}' if args.cycle_moe_sweep else '')) if sweep else 'dflash-target-cycle'}
                     ranks = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
                     emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in ranks]
                     equal = len(ranks) == 8 and all(values == emitted[0] for values in emitted)
-                    entry = dict(batch=batch, verify_rows=extent, binding_mode=binding_mode, gqa_mode=gqa,
+                    entry = dict(batch=batch, verify_rows=extent, binding_mode=binding_mode, gqa_mode=gqa, moe_mode=moe_mode,
                                  ranks=ranks, replicas_equal=equal)
                     routes_equal = True
                     if args.cycle_routes:
