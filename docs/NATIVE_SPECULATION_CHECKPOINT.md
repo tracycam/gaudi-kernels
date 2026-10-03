@@ -52,8 +52,9 @@ vLLM allocator's COW/async lease implementation.
 
 ## Next implementation priorities
 
-1. Attribute the40–60ms replay body by actual engine/recipe/operator intervals.
-   Fixed bindings do not explain that remaining time. SDK enqueue currently
+1. Use the physical engine/recipe/operator budget below to qualify changes.
+   Route-batched compact12 has passed correctness but not an end-to-end win.
+   SDK enqueue currently
    takes approximately5–7ms and overlaps device work; never add it again to
    the completion span. Compare shared QKV/attention/MoE policies with the
    qualified native baseline, including all multirow fallbacks.
@@ -150,3 +151,41 @@ retain original packed weight storage but can reread the same expert for
 different routes. Removing activation prep/replication does not establish
 unique-expert HBM reuse or zero physical read amplification. Production
 row dispatch stays unchanged until the consumer-chain evidence supports it.
+
+## Aligned cohort cost measurements
+
+Source `7745490` ran actual70-layer TP8 target + checkpoint DFlash on private
+4K real-context cohorts,16 cycles each. All ranks passed live-KV, finite,
+committed-context and output-replica checks. No weight/precision policy change.
+Start alignment follows the intrusive KV snapshot, before the narrow timer.
+Only warmup, capture and one profiled cycle are excluded from the table.
+The numerator and denominator use **the same13 replay cycles**, not acceptance
+averaged over all16 cycles divided by a timing median.
+
+| Cohort | Maximum-rank cycle median | Delivered counts in timed cycles | Sum of maximum-rank cycle durations | Diagnostic tokens/s per request |
+|---|---|---|---|---|
+| B1,T8 |28.37ms|67|0.369391s|181.38|
+| B2,T4 |31.91ms|39 /42|0.414634s|94.06 /101.29|
+
+These are bounded model-chain costs, **not qualified serving TPS**. The timer
+includes preparation, drafting, target validation, device acceptance, context
+append, completion vote and output delivery. It excludes cold capture and
+full-KV audits/witness readbacks outside the timer. Requests use private fixed
+arenas, ignore EOS and stop after a short diagnostic budget; scheduler/COW,
+completed answers and HTTP remain pending. Readable partial continuations were
+retained privately; they do not constitute a task-quality pass.
+
+Aligned B3,T4 compact12 ABBA (`82f9f7f`) passes every integer witness, but
+averaging case medians gives40.72ms production versus40.73ms candidate.
+Measured GP/down TPC-family union grows12.25→12.70ms while preparation shrinks;
+physical compute union stays about26.6ms. Five timed cycles emit17/15/17 tokens
+per request; the two production arms yield about83–85/73–75/83–85 diagnostic
+tokens/s per request. The slowest request remains below the80 target even
+before serving integration. Captured cycles still contain314 SDK submissions.
+NIC execution remains unobserved. No compact12 production promotion.
+
+The next service milestone is to reproduce these costs through existing vLLM
+request/KV ownership with complete verified-prefix delivery, EOS and cohort
+changes. Small-M kernel work must improve instructions/weight reuse, rather
+than only replace wrappers. Prefill needs true expert-M grouped reuse; this
+route-batched path is not a high-throughput large-M GEMM implementation.

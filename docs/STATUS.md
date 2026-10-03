@@ -41,6 +41,16 @@ request's own completion; summing those rates is not a valid aggregate measure.
 The timing is at the engine client, not HTTP. Outputs hit the length budget, so
 they do not establish complete-answer or EOS quality.
 
+Later aligned private DFlash model-chain diagnostics measured B1,T8 at28.37ms
+and B2,T4 at31.91ms per cycle. Counting emitted tokens over the same unprofiled
+replays gives181.38 and94.06/101.29 diagnostic tokens/s respectively. These
+exclude external full-KV audits, cold capture and profiler work; they are not
+new serving/HTTP results. All eight ranks passed, readable partial continuations
+were preserved, and precision selection remains deferred. Aligned B3,T4 still
+misses the80 tokens/s/request target on its slower request. A compact12 MoE
+wrapper experiment is numerically correct but did not improve full-cycle cost.
+See [scope and remaining integration](NATIVE_SPECULATION_CHECKPOINT.md).
+
 ## Prefill interference
 
 An earlier real-context native arm measured first-token arrival at 4.14/8.51 s
