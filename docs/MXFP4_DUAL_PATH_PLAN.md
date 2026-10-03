@@ -174,3 +174,13 @@ The actual decoded address union rises24→36MiB: the compiler uses three
 weight buffers despite the requested two slots. Hence this result trades SRAM
 capacity for lower observed latency; it does not prove physical overlap without
 an engine trace and must be retested within GP/gate/down/combine lifetimes.
+
+
+## Device checkpoint
+
+See [expert-M dispatch implementation and measurements](MOE_EXPERT_DISPATCH_CHECKPOINT.md).
+Changing device counts now select unique expert buckets and masked TPC fallback;
+complete T512/T513 W4A16 chains have measured wins. Static unused MME capacity
+still executes. Invalid intermediate rows may contain stale/NaN values only
+under the explicitly tested mask-before-read consumer contract; that is not
+proof of skipping MME arithmetic. The model default is not yet switched.

@@ -18,7 +18,8 @@ for (graph,iteration),rows in sorted(buckets.items()):
  span=max(v[1] for v in spans)-min(v[0] for v in spans)
  recipes.append(dict(graph=graph,iteration=iteration,node_count=len(rows),span_us=span,all_nodes_union_us=union(spans),gap_us=span-union(spans),engine_unions_us={k:union(v) for k,v in engines.items()},families=sorted([dict(op=k,nodes=len(v),union_us=union(v),sum_us=sum(b-a for a,b in v)) for k,v in families.items()],key=lambda r:-r['union_us'])))
 placement=[]
-for graph in json.loads(a.graph.read_text())['graphs']:
+graph_files=sorted(a.graph.rglob('*.json')) if a.graph.is_dir() else [a.graph]
+for graph in [g for f in graph_files for g in json.loads(f.read_text())['graphs']]:
  tensors={x['name']:x for x in graph['tensors']};nodes=[n for n in graph['nodes'] if n.get('guid') in ('gk_expert_decode_k8','gk_mxfp4_graph_decode_historical')]
  outputs=[tensors[name] for n in nodes for name in n['output_tensors']]
  placement.append(dict(graph=graph['name'],nodes=len(graph['nodes']),decode_nodes=len(nodes),sram_decode_outputs=sum(t['allocation']=='SRAM' for t in outputs),all_decoded_fragments_sram=all(t['allocation']=='SRAM' for t in outputs),workspace_bytes=graph['workspace_size']))

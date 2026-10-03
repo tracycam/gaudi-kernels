@@ -74,3 +74,15 @@ Small-M production MoE remains on the hand-scheduled TPC path. A slower
 decode-to-BF16/MME experiment is not promoted merely because it uses MME.
 Dispatch should depend on each expert's actual M and measured complete-chain
 cost, not just total batch size.
+
+
+## Device expert-M dispatch checkpoint
+
+The [W4A16 expert dispatcher](MOE_EXPERT_DISPATCH_CHECKPOINT.md) partitions
+experts on device and avoids repeated weight decode across M tiles. A T512
+complete local MoE chain improved6.790→4.522ms on saved checkpoint routes;
+one shared plan also beat broadcast for8/32/384 active-expert distributions.
+T513, sparse padding/NaN poisoning, restored routes and CPU FP32 reference
+checks were added. These are operator results, not a new full-model TPS.
+Production defaults and small-T compact dispatch remain unchanged; provider
+consolidation and model integration are still required. W4A8 remains pending.
