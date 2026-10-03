@@ -6,6 +6,18 @@ to byte codes on the CPU at a time; no BF16 weight copy is constructed.
 """
 import numpy as np
 
+def unpack_acc32_lanes(values):
+    """Decode the GP partial ABI: each128 BF16 lanes stores even64, then odd64.
+
+    This is an accumulator storage permutation, not a numeric conversion.
+    Gate consumers already implement it. Use it before comparing raw GP
+    partials against a row-major dot-product reference. Not a generic MME ABI.
+    """
+    a = np.asarray(values)
+    if a.dtype != np.float32 or not a.ndim or a.shape[-1] % 128:
+        raise ValueError('FP32 GP partial vectors in multiples of128 required')
+    return a.reshape(*a.shape[:-1], a.shape[-1]//128, 2, 64).swapaxes(-1,-2).reshape(a.shape)
+
 def pack(packed_rows, scales):
     p = np.asarray(packed_rows)
     s = np.asarray(scales)

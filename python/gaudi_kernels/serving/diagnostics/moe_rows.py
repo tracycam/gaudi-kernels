@@ -16,7 +16,7 @@ def on_worker(worker, plan):
     from gaudi_kernels.serving.executor.batch_ops import moe
     from gaudi_kernels.serving.executor.gp_scale_tail_runtime import operator
     from gaudi_kernels.serving.executor.precision_ops import combine
-    from gaudi_kernels.serving.executor.packing import unpack
+    from gaudi_kernels.serving.executor.packing import unpack, unpack_acc32_lanes
 
     rows = tuple(plan['rows'])
     if (worker.model_runner.input_batch.num_reqs or context().native.active or
@@ -109,14 +109,17 @@ def on_worker(worker, plan):
                     scale = torch.pow(2.,torch.from_numpy(scales)[columns].float()-127).repeat_interleave(32,-1)
                     decoded = lut[code]*scale
                     fp32 = decoded @ x_cpu[0].float()
-                    actual = cpu['compact'][2].reshape(n,8,3,512)[0,0].sum(0)[columns]
+                    raw_partial = cpu['compact'][2].reshape(n,8,3,512)[0,0]
+                    actual = torch.from_numpy(unpack_acc32_lanes(raw_partial.numpy())).sum(0)[columns]
                     # A separately materialized GP tests whether a graph's
                     # consumer reused a supposedly retained partial buffer.
                     solo = gp_call(e.gp,e.gs,inputs[0].clone(),e.table,inputs[1].int().clone()).clone()
                     sync()
-                    solo_cpu = solo.cpu().reshape(n,8,3,512)[0,0].sum(0)
+                    solo_partial = solo.cpu().reshape(n,8,3,512)[0,0]
+                    solo_cpu = torch.from_numpy(unpack_acc32_lanes(solo_partial.numpy())).sum(0)
                     torch.save(dict(packed=torch.from_numpy(unpack(w,s)[0]),
                         scales=torch.from_numpy(unpack(w,s)[1]),x=x_cpu[0],
+                        graph_partial_abi=raw_partial,standalone_partial_abi=solo_partial,
                         graph_actual=actual,standalone_actual=solo_cpu,reference=fp32),
                         root/f'rank{worker.rank}-r{n}-gp-reference.pt')
                     report.setdefault('fp32_samples',[]).append(dict(rows=n,
