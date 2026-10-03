@@ -73,7 +73,8 @@ def on_worker(worker, plan):
             anchors.index_copy_(0, torch.tensor(finished, device=runner.device), prefill.logits.argmax(-1).to(torch.int32))
     remaining = torch.full((rows,), cycles*extent+1, device=runner.device, dtype=torch.int32)
     arena = target.session
-    target.session = BoundKVSession(arena, (extent,)*rows, max(capacities.values()))
+    target.session = BoundKVSession(arena, (extent,)*rows, max(capacities.values()),
+                                    static_pages=plan.get('static_pages', True))
     label = plan.get('label', 'dflash-target-cycle')
     if type(label) is not str or not label or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in label):
         raise ValueError('Cycle evidence label must be a simple local directory name')
@@ -82,6 +83,7 @@ def on_worker(worker, plan):
     report = {'rank': worker.rank, 'pass': False, 'cycles': [], 'source_target_layers': 70,
               'drafter_layers': draft.spec.layers, 'drafter_block': draft.spec.block, 'verify_rows': extent,
               'proposal_hidden_positions': list(range(1, extent)),
+              'static_page_bindings': target.session.static_pages,
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     recorded = bool(plan.get('record_cycle', False))
@@ -102,6 +104,7 @@ def on_worker(worker, plan):
                         for t in tensors) for name, tensors in arena.caches.items()}
             began = time.perf_counter_ns()
             metadata = target.session.prepare(schedule)
+            prepared_at = time.perf_counter_ns()
             execution = {'kind': 'eager-warmup' if recorded else 'eager'}
             if recorded and step == 1:
                 from gaudi_kernels.serving.diagnostics.cycle_recorder import CycleRecorder
@@ -114,8 +117,10 @@ def on_worker(worker, plan):
                 execution = {'kind': 'recorded-replay', **timing}
             else:
                 result = coordinator.run_prepared(schedule, metadata, anchors, remaining)
+            executed_at = time.perf_counter_ns()
             output = coordinator.finish_at_output_boundary(result)
-            elapsed = time.perf_counter_ns()-began
+            delivered_at = time.perf_counter_ns()
+            elapsed = delivered_at-began
             emitted = tuple(len(row.emitted_tokens) for row in output.requests)
             # Keep external input addresses stable for the recorded cycle.
             anchors.copy_(result.next_anchor_ids)
@@ -135,6 +140,9 @@ def on_worker(worker, plan):
                       'emitted_ids': [list(row.emitted_tokens) for row in output.requests],
                       'matched_drafts': result.verification.matched_draft_counts.cpu().tolist(),
                       'eager_cycle_wall_ns': elapsed, 'old_target_kv_bytes_unchanged': unchanged,
+                      'prepare_wall_ns': prepared_at-began,
+                      'execute_wall_ns': executed_at-prepared_at,
+                      'delivery_wall_ns': delivered_at-executed_at,
                       'finite': bool(torch.isfinite(result.target.hidden).all().cpu() and
                                      torch.isfinite(result.target.logits).all().cpu())}
             _, ring_positions, ring_valid = coordinator.context.state()

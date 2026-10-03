@@ -19,6 +19,14 @@ class PagedAttentionMetadata(PackedAttentionMetadata):
     flat_query_positions: torch.Tensor | None = None
 
 
+@dataclass
+class PageReservation:
+    """CPU ownership only; cannot be passed to an attention consumer."""
+    batch: object
+    session: object
+    candidate_slots: tuple
+
+
 class PagedKVSession(PackedKVSession):
     def __init__(self, geometries, request_capacities, *, device, dtype=torch.bfloat16, native_swa=False):
         if (not request_capacities or any(type(rid) is not str or not rid or type(n) is not int or n < 1
@@ -35,7 +43,7 @@ class PagedKVSession(PackedKVSession):
             prepare()
         super().__init__(geometries, extent, device=device, dtype=dtype)
 
-    def prepare(self, batch):
+    def _validate(self, batch):
         if self.pending is not None:
             raise ValueError('Page arena has an unfinished transaction')
         for request in batch.requests:
@@ -43,6 +51,22 @@ class PagedKVSession(PackedKVSession):
                     request.start_position != len(self.committed.get(request.request_id, ())) or
                     request.start_position + request.query_length > self.request_capacities[request.request_id]):
                 raise ValueError('Page request ownership, cursor or capacity mismatch')
+
+    def reserve(self, batch):
+        """Reserve a prefix without constructing changing-length device arrays.
+
+        The bounded consumer supplies its own fixed-capacity device bindings.
+        This descriptor only participates in stale-checked commit/abort.
+        """
+        self._validate(batch)
+        candidates = tuple(tuple(range(self.bases[r.request_id]+r.start_position,
+                                       self.bases[r.request_id]+r.start_position+r.query_length))
+                           for r in batch.requests)
+        self.pending = PageReservation(batch, self, candidates)
+        return self.pending
+
+    def prepare(self, batch):
+        self._validate(batch)
         candidates, visible, key_positions, query_positions = [], [], [], []
         mapping, pages, groups, positions = [], [], [], []
         row = 0

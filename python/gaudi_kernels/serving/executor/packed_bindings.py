@@ -68,14 +68,15 @@ class BoundKVSession:
     Padding reads safe slot zero and is explicitly masked on device. SWA reads
     at most window+query_length-1 slots rather than the full history capacity.
     """
-    def __init__(self, arena, query_lengths, history_capacity):
+    def __init__(self, arena, query_lengths, history_capacity, *, static_pages=True):
         lengths = tuple(query_lengths)
         if (not lengths or any(type(n) is not int or n < 1 for n in lengths) or
-                type(history_capacity) is not int or history_capacity < max(lengths)):
+                type(history_capacity) is not int or history_capacity < max(lengths) or type(static_pages) is not bool):
             raise ValueError('Positive fixed query/history capacities required')
         self.arena = arena
         self.query_lengths = lengths
         self.history_capacity = history_capacity
+        self.static_pages = static_pages
         self.pending = None
         self._actual = None
         device = arena.device
@@ -88,6 +89,7 @@ class BoundKVSession:
         self.window_page_ids = torch.empty(2*sum(lengths), device=device, dtype=torch.int32)
         self.window_page_groups = torch.empty_like(self.window_page_ids)
         self.flat_query_positions = torch.empty(sum(lengths), device=device, dtype=torch.int32)
+        self._page_requests = None
 
     @property
     def caches(self):
@@ -98,8 +100,12 @@ class BoundKVSession:
             raise ValueError('Unfinished transaction or changed fixed query extents')
         if any(r.start_position + r.query_length > self.history_capacity for r in batch.requests):
             raise ValueError('History exceeds captured attention capacity')
-        actual = self.arena.prepare(batch)
+        from gaudi_kernels.serving.executor.packed_pages import PagedKVSession
+        paged = self.static_pages and isinstance(self.arena, PagedKVSession)
+        actual = self.arena.reserve(batch) if paged else self.arena.prepare(batch)
         try:
+            if paged:
+                return self._prepare_pages(batch, actual)
             self.mapping.copy_(actual.slot_mapping)
             for i, request in enumerate(batch.requests):
                 length = request.start_position + request.query_length
@@ -121,6 +127,47 @@ class BoundKVSession:
         except BaseException:
             self.arena.abort(actual)
             raise
+
+    def _prepare_pages(self, batch, actual):
+        """Keep device extents fixed as logical history advances.
+
+        Request-private page mappings are static. Padding beyond a request's
+        capacity always points to safe slot0; visibility is a separate length
+        input. Only query-sized arrays and scalar lengths change each step.
+        """
+        arena = self.arena
+        if self._page_requests != batch.request_ids:
+            for i, request in enumerate(batch.requests):
+                base = arena.bases[request.request_id]
+                cap = arena.request_capacities[request.request_id]
+                slots = [base+p if p < cap else 0 for p in range(self.history_capacity)]
+                self.slots[i].copy_(torch.tensor(slots, dtype=torch.int64))
+            self._page_requests = batch.request_ids
+        pages, groups, positions, mapping = [], [], [], []
+        row = 0
+        for i, request in enumerate(batch.requests):
+            end = request.start_position+request.query_length
+            self.lengths[i].copy_(torch.tensor(end, dtype=torch.int64))
+            current = tuple(range(request.start_position, end))
+            self.query_positions[i].copy_(torch.tensor(current, dtype=torch.int64))
+            mapping.extend(actual.candidate_slots[i])
+            base = arena.bases[request.request_id]
+            for position in current:
+                logical = max(0, position-127)//128*128
+                pages.extend((base//128+logical//128,
+                              base//128+logical//128+1 if position >= logical+128 else -1))
+                groups.extend((row, row))
+                positions.append(position)
+                row += 1
+        self.mapping.copy_(torch.tensor(mapping, dtype=torch.int64))
+        self.window_page_ids.copy_(torch.tensor(pages, dtype=torch.int32))
+        self.window_page_groups.copy_(torch.tensor(groups, dtype=torch.int32))
+        self.flat_query_positions.copy_(torch.tensor(positions, dtype=torch.int32))
+        self.pending = BoundAttentionMetadata(batch, self, actual.candidate_slots, self.mapping,
+            self.slots, self.key_positions, self.query_positions, True, self.lengths, self.history_capacity,
+            self.window_page_ids, self.window_page_groups, self.flat_query_positions)
+        self._actual = actual
+        return self.pending
 
     def commit(self, metadata, prefix_lengths):
         if metadata is not self.pending:

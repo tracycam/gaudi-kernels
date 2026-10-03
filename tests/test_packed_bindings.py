@@ -7,6 +7,7 @@ import torch
 from gaudi_kernels.engine.token_batch import RequestTokens, TokenBatch
 from gaudi_kernels.serving.executor.packed_attention import PackedKVSession, forward_packed, tiled_attention
 from gaudi_kernels.serving.executor.packed_bindings import BoundKVSession, PackedInputBuffers
+from gaudi_kernels.serving.executor.packed_pages import PagedKVSession
 
 
 class PackedBindingTests(unittest.TestCase):
@@ -72,3 +73,37 @@ class PackedBindingTests(unittest.TestCase):
             bound.prepare(TokenBatch((RequestTokens('a', (3, 4), 1, 'verify'),)))
         self.assertIsNone(arena.pending)
         self.assertIsNone(bound.pending)
+
+    def test_static_page_bindings_match_variable_views_with_rejection_and_nan_padding(self):
+        for window in (None, 128):
+            regular = PagedKVSession({'layer': (1, 4, 3)}, {'a': 7, 'b': 19}, device='cpu')
+            bound = BoundKVSession(PagedKVSession({'layer': (1, 4, 3)}, {'a': 7, 'b': 19}, device='cpu'),
+                                   (1, 3), 32)
+            for arena in (regular, bound.arena):
+                for tensor in arena.caches['layer']:
+                    tensor.fill_(float('nan'))
+            impl = SimpleNamespace(num_heads=2, num_kv_heads=1, head_size=4, head_size_v=3,
+                scale=.5, sliding_window=window, sinks=torch.tensor([.2, -.1]),
+                kv_sharing_target_layer_name=None, alibi_slopes=None)
+            pointers = None
+            torch.manual_seed(42)
+            for commits in ((1, 2), (1, 0), (1, 3)):
+                starts = tuple(len(regular.committed.get(r, ())) for r in ('a', 'b'))
+                batch = TokenBatch((RequestTokens('a', (11,), starts[0], 'decode'),
+                                    RequestTokens('b', (21, 22, 23), starts[1], 'verify')))
+                normal, prepared = regular.prepare(batch), bound.prepare(batch)
+                current = tuple(t.data_ptr() for t in (prepared.slot_mapping, *prepared.visible_slots,
+                    *prepared.visible_lengths, *prepared.query_positions, prepared.window_page_ids))
+                self.assertEqual(current, pointers or current)
+                pointers = current
+                self.assertEqual(prepared.window_page_ids.tolist(), normal.window_page_ids.tolist())
+                self.assertEqual(prepared.flat_query_positions.tolist(), normal.flat_query_positions.tolist())
+                self.assertEqual(prepared.visible_slots[1][19:].tolist(), [0]*13)
+                q, k, v = torch.randn(4, 2, 4), torch.randn(4, 1, 4), torch.randn(4, 1, 3)
+                expected = forward_packed(impl, SimpleNamespace(layer_name='layer'), q, k, v, normal)
+                actual = forward_packed(impl, SimpleNamespace(layer_name='layer'), q, k, v, prepared)
+                self.assertTrue(torch.isfinite(actual).all())
+                torch.testing.assert_close(actual, expected, rtol=2e-6, atol=2e-6)
+                regular.commit(normal, commits)
+                bound.commit(prepared, commits)
+                self.assertEqual(regular.committed, bound.arena.committed)
