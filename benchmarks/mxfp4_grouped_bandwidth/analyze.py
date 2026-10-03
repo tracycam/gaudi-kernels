@@ -33,7 +33,7 @@ def graph_audit(case, plan):
     graph=graphs[0];ts={t['name']:t for t in graph['tensors']}
     e,pool,n,k,m,s,banks=(plan[a] for a in ('experts','pool','N','K','M_cap','splits','banks'))
     tile=plan.get('weight_tile',2*ts['packed']['max_shape'][0])
-    assert 8<=e<=pool<=384 and pool==e*banks and n%tile==0 and k%32==0
+    assert 1<=e<=pool<=384 and pool==e*banks and n%tile==0 and k%32==0
     for name,shape in [('packed',[tile//2,k,n//tile,pool]),('scales',[tile,k//32,n//tile,pool])]:
         t=ts[name];assert t['persistent'] and t['dtype']=='uint8' and t['allocation']=='DRAM'
         assert t['max_shape']==shape

@@ -54,7 +54,7 @@ def quantize_mxfp8(x):
     q = (blocks / scale.unsqueeze(-1)).to(torch.float8_e4m3fn)
     if not torch.isfinite(q.float()).all():
         raise ValueError('activation exceeds finite MXFP8 reference domain')
-    return q.reshape(v.shape[0], -1)[:, :k], exponent.to(torch.uint8)
+    return q.reshape(v.shape[0], ((k+31)//32)*32)[:, :k], exponent.to(torch.uint8)
 
 
 def linear_reference(x, weights, expert, *, policy):

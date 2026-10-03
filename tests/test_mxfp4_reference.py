@@ -28,6 +28,19 @@ class RaggedMXFP4ReferenceTests(unittest.TestCase):
         restored = q.float() * torch.exp2(s.float()-127).repeat_interleave(32, -1)[:, :35]
         torch.testing.assert_close(restored, x.float(), rtol=0, atol=0)
 
+    def test_w4a16_matches_independently_dequantized_dense_product(self):
+        torch.manual_seed(55)
+        lut = torch.tensor([0.,.5,1.,1.5,2.,3.,4.,6.,0.,-.5,-1.,-1.5,-2.,-3.,-4.,-6.])
+        for k in (1,31,32,33,64,129):
+            w = self.weights(2,11,k)
+            x = torch.randn(7,k).bfloat16()
+            code = torch.empty((11,2*w.packed.shape[-1]), dtype=torch.long)
+            code[:,0::2] = (w.packed[1]&15).long()
+            code[:,1::2] = (w.packed[1]>>4).long()
+            decoded = lut[code[:,:k]] * torch.exp2(w.scales[1].float()-127).repeat_interleave(32,-1)[:,:k]
+            torch.testing.assert_close(linear_reference(x,w,1,policy='w4a16'),
+                                       x.float()@decoded.T, atol=1e-5, rtol=2e-5)
+
     def test_ragged_expert_counts_and_token_permutation(self):
         torch.manual_seed(321)
         # Counts [4,3,2,1,0]: no per-expert padding, one inactive expert.
@@ -55,6 +68,9 @@ class RaggedMXFP4ReferenceTests(unittest.TestCase):
             gp.validate()
 
     def test_empty_and_all_masked_routes(self):
+        q, s = quantize_mxfp8(torch.empty((0,35), dtype=torch.bfloat16))
+        self.assertEqual(tuple(q.shape), (0,35))
+        self.assertEqual(tuple(s.shape), (0,2))
         gp, down = self.weights(1, 8, 4), self.weights(1, 4, 4)
         for t in (0, 3):
             for policy in ('w4a16', 'w4a8_mxfp8'):
