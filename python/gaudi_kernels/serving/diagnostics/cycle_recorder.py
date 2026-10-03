@@ -65,13 +65,13 @@ class CycleRecorder:
         return result
 
     def replay(self, schedule, metadata):
-        import torch
-        import habana_frameworks.torch.core as htcore
         if (self.captured is None or self.cycle.pending is not None or self.cycle.failed or
                 self.cycle.target.session.pending is not metadata or metadata.batch is not schedule or
                 self._signature(schedule) != self.signature or
                 self._addresses(metadata) != self.addresses):
             raise ValueError('Recorded cycle binding/ownership changed')
+        import torch
+        import habana_frameworks.torch.core as htcore
         htcore.mark_step()
         torch.hpu.synchronize()
         times = [ctypes.c_uint64() for _ in range(3)]
