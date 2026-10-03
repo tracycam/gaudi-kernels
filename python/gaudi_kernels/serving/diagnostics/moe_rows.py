@@ -46,7 +46,7 @@ def on_worker(worker, plan):
         p = gp_call(e.gp, e.gs, x, e.table, ids)
         gate = torch.ops.unified_batch.gate(p, ids)
         d = torch.ops.gaudi_down_activation.broadcast(e.dp, e.ds, gate, e.table, ids)
-        return combine(d, routing, e.directions, 6144, 8), p
+        return combine(d, routing, e.directions, 6144, 8), p.clone()
     def same(a, b):
         return torch.equal(a.contiguous().view(torch.uint8), b.contiguous().view(torch.uint8))
     generator = torch.Generator().manual_seed(103124)
@@ -101,18 +101,29 @@ def on_worker(worker, plan):
                     w = e.gp[:6144].cpu().numpy().reshape(1,6144,256)
                     s = e.gs[:192].cpu().numpy().reshape(1,192,512)
                     packed, scales = unpack(w,s)
-                    columns = torch.tensor([0,1,127,128,255,256,383,511])
+                    columns = torch.arange(512)
                     packed = torch.from_numpy(packed)[columns]
-                    code = torch.empty(8,6144,dtype=torch.long)
+                    code = torch.empty(512,6144,dtype=torch.long)
                     code[:,0::2],code[:,1::2] = (packed & 15).long(),(packed >> 4).long()
                     lut = torch.tensor([0,.5,1,1.5,2,3,4,6,-0.,-.5,-1,-1.5,-2,-3,-4,-6])
                     scale = torch.pow(2.,torch.from_numpy(scales)[columns].float()-127).repeat_interleave(32,-1)
                     decoded = lut[code]*scale
                     fp32 = decoded @ x_cpu[0].float()
                     actual = cpu['compact'][2].reshape(n,8,3,512)[0,0].sum(0)[columns]
+                    # A separately materialized GP tests whether a graph's
+                    # consumer reused a supposedly retained partial buffer.
+                    solo = gp_call(e.gp,e.gs,inputs[0].clone(),e.table,inputs[1].int().clone()).clone()
+                    sync()
+                    solo_cpu = solo.cpu().reshape(n,8,3,512)[0,0].sum(0)
+                    torch.save(dict(packed=torch.from_numpy(unpack(w,s)[0]),
+                        scales=torch.from_numpy(unpack(w,s)[1]),x=x_cpu[0],
+                        graph_actual=actual,standalone_actual=solo_cpu,reference=fp32),
+                        root/f'rank{worker.rank}-r{n}-gp-reference.pt')
                     report.setdefault('fp32_samples',[]).append(dict(rows=n,
                         reference=fp32.tolist(), actual=actual.tolist(),
                         relative_l2=float((actual-fp32).norm()/fp32.norm().clamp_min(1e-30)),
+                        standalone_relative_l2=float((solo_cpu-fp32).norm()/fp32.norm().clamp_min(1e-30)),
+                        graph_standalone_bits_equal=same(actual,solo_cpu),
                         scope='Independent FP32 dot products; legal accumulation-tree differences reported, precision threshold deferred'))
                 check = dict(rows=n,state=state,finite=finite,production_bits_equal=equal,metamorphic_pass=metamorphic)
                 report['checks'].append(check)
