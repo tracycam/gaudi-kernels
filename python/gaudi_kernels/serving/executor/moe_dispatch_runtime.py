@@ -54,12 +54,13 @@ def snapshot():
     return {'compact_rows': list(_ROWS), 'grouped_rows': list(_GROUPED_ROWS), 'mode': 'auto', 'python_capture_calls_by_rows': {k: dict(v) for (k, v) in _COUNTS.items()}, 'scope': 'static metadata at capture; not device invocation counts'}
 
 
-def forward(x, ids, routing, gp, gs, down, ds, table, directions):
+def forward(x, ids, routing, gp, gs, down, ds, table, directions, *, grouped=None):
     """One production entry; only static metadata selects a graph family."""
     from .batch_ops import moe
     mode = select_mode('auto', x.shape[0])
     args = (x, ids, routing, gp, gs, down, ds, table, directions)
     if mode == 'grouped':
-        from .grouped_moe_runtime import forward as grouped
-        return grouped(*args)
+        if grouped is None:
+            raise ConfigError('Grouped production dispatch requires a weight-owning graph adapter')
+        return grouped(x, ids, routing)
     return moe(*args, mode=mode)

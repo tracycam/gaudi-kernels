@@ -17,6 +17,7 @@ class NativeExpertTP(torch.nn.Module):
         (table, directions) = native_ops.constants(self.gp.device)
         self.register_buffer('table', table)
         self.register_buffer('directions', directions)
+        self._grouped_graph = None
 
     def forward(self, x, topk_ids, topk_weights, permuted_weights=True, activation='silu'):
         assert x.ndim == 2 and x.shape[-1] == 6144 and (topk_ids.ndim == 2)
@@ -25,10 +26,25 @@ class NativeExpertTP(torch.nn.Module):
         from .moe_dispatch_runtime import forward
         from gaudi_kernels.serving.diagnostics import boundary_hashes as boundary
         output = forward(x, topk_ids, topk_weights, self.gp, self.gs,
-                         self.dp, self.ds, self.table, self.directions)
+                         self.dp, self.ds, self.table, self.directions, grouped=self._grouped_forward)
         if boundary.active():
             return boundary.emit(self._boundary_layer_index, 'moe_local', output)
         return output
+
+    def _grouped_forward(self, x, ids, routing):
+        if self._grouped_graph is None:
+            from .grouped_moe import GroupedMoE
+            # Weight owners stay bound to this layer; graph replay only binds
+            # activations/routes. Never copy the expert weights between layers.
+            self._grouped_graph = torch.hpu.wrap_in_hpu_graph(
+                GroupedMoE(self), disable_tensor_cache=True, asynchronous=False,
+                max_graphs=5)
+        return self._grouped_graph(x, ids, routing)
+
+    def clear_grouped_cache(self):
+        if self._grouped_graph is not None:
+            self._grouped_graph.clear_cache()
+
 
 
 def process_weights(self, layer):
