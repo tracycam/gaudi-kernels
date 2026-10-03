@@ -56,7 +56,7 @@ try:
   import habana_frameworks.torch as ht
   from torch.utils.cpp_extension import load
   h=Path(ht.__file__).parent
-  load(name='gaudi_expert_partition',sources=[str(root/'csrc/torch/moe_partition.cpp')],extra_include_paths=[str(h/'include')],extra_cflags=['-O2'],extra_ldflags=[f'-L{h}/lib',f'-Wl,-rpath,{h}/lib','-lhabana_pytorch_plugin'],build_directory=str(out),is_python_module=False,verbose=True)
+  load(name='gaudi_expert_partition',sources=[str(root/'csrc/torch/moe_partition.cpp')],extra_include_paths=[str(h/'include'),'/usr/include/habanalabs'],extra_cflags=['-O2'],extra_ldflags=[f'-L{h}/lib',f'-Wl,-rpath,{h}/lib','-lhabana_pytorch_plugin'],build_directory=str(out),is_python_module=False,verbose=True)
  report['state']='built_not_device_verified'
 except BaseException as error:
  report.update(state='failed',error=repr(error));raise
