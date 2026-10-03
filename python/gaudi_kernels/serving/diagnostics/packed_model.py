@@ -53,6 +53,8 @@ def on_worker(worker, plan):
         before_branches = block_snapshot()['python_apply_branch_counts']
         try:
             candidate = packed.execute(batch)
+            actual_hidden = candidate.hidden.detach().cpu().clone()
+            actual_logits = candidate.logits.detach().cpu().clone()
         finally:
             for handle in handles:
                 handle.remove()
@@ -70,7 +72,6 @@ def on_worker(worker, plan):
                 reference_logits.append(output.logits.cpu())
         expected_hidden = torch.cat(reference_hidden)
         expected_logits = torch.cat(reference_logits)
-        actual_hidden, actual_logits = candidate.hidden.cpu(), candidate.logits.cpu()
         checks = [compare_logits(expected_logits[i:i+1], actual_logits[i:i+1], contract='fp32_arithmetic_v1')
                   for i in range(sum(rows))]
         delta = actual_hidden.float() - expected_hidden.float()
@@ -129,9 +130,29 @@ def on_worker(worker, plan):
             for index, (request, count) in enumerate(zip(requests, prefixes)))
         following = TokenBatch(tuple(RequestTokens(str(i), (211 + i,), starts[i] + prefixes[i], 'decode')
                                      for i in range(len(rows))))
+        kv_differences = []
+        for name, tensors in packed.session.caches.items():
+            reference_tensors = continuation.session.caches[name]
+            for request, count in zip(requests, prefixes):
+                packed_slots = packed.session.committed[request.request_id][request.start_position:]
+                oracle_slots = continuation.session.committed[request.request_id][request.start_position:]
+                if not count:
+                    continue
+                a_indices = torch.tensor(packed_slots, dtype=torch.int64, device=runner.device)
+                b_indices = torch.tensor(oracle_slots, dtype=torch.int64, device=runner.device)
+                for kind, tensor, reference_tensor in zip(('key', 'value'), tensors, reference_tensors):
+                    a = tensor.index_select(0, a_indices).cpu().float()
+                    b = reference_tensor.index_select(0, b_indices).cpu().float()
+                    if not torch.equal(a, b):
+                        kv_differences.append({'layer': name, 'request': request.request_id, 'kind': kind,
+                            'relative_l2': ((a-b).norm()/b.norm().clamp_min(1e-30)).item(),
+                            'max_abs': (a-b).abs().max().item()})
+        row['accepted_kv_differences'] = kv_differences
         actual_next = packed.execute(following)
+        actual_next_logits = actual_next.logits.detach().cpu().clone()
         expected_next = continuation.execute(following)
-        next_checks = [compare_logits(expected_next.logits[i:i+1].cpu(), actual_next.logits[i:i+1].cpu(),
+        expected_next_logits = expected_next.logits.detach().cpu().clone()
+        next_checks = [compare_logits(expected_next_logits[i:i+1], actual_next_logits[i:i+1],
                        contract='fp32_arithmetic_v1') for i in range(len(rows))]
         row['continuation_checks'] = next_checks
         row['continuation_pass'] = all(check['pass'] for check in next_checks)
@@ -142,8 +163,8 @@ def on_worker(worker, plan):
         if worker.rank == 0:
             torch.save({'candidate_hidden': actual_hidden, 'reference_hidden': expected_hidden,
                         'candidate_logits': actual_logits, 'reference_logits': expected_logits,
-                        'continuation_logits': actual_next.logits.cpu(),
-                        'continuation_reference_logits': expected_next.logits.cpu()}, directory/(case['name']+'.pt'))
+                        'continuation_logits': actual_next_logits,
+                        'continuation_reference_logits': expected_next_logits}, directory/(case['name']+'.pt'))
         report['cases'].append(row)
         (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     report['pass'] = all(c['all_query_pass'] and c['continuation_pass'] and c['every_shared_call_compact']
