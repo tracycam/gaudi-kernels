@@ -73,6 +73,7 @@ def on_worker(worker, plan):
     root.mkdir(exist_ok=True)
     report = {'rank': worker.rank, 'pass': False, 'cycles': [], 'source_target_layers': 70,
               'drafter_layers': draft.spec.layers, 'drafter_block': draft.spec.block, 'verify_rows': extent,
+              'proposal_hidden_positions': list(range(1, extent)),
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     try:
@@ -96,6 +97,11 @@ def on_worker(worker, plan):
                 tensor.index_select(0, index).cpu().contiguous().view(torch.uint8))
                 for name, tensors in arena.caches.items() for saved, tensor in zip(before[name], tensors))
             record = {'step': step, 'starts': starts, 'emitted': emitted,
+                      # These readbacks are outside the measured device chain,
+                      # after output delivery. Keep proposal/target alignment
+                      # visible; acceptance alone cannot diagnose bad indexing.
+                      'proposed_ids': result.proposed_ids.cpu().tolist(),
+                      'target_next_ids': result.target.logits.argmax(-1).reshape(rows, extent).cpu().tolist(),
                       'emitted_ids': [list(row.emitted_tokens) for row in output.requests],
                       'matched_drafts': result.verification.matched_draft_counts.cpu().tolist(),
                       'eager_cycle_wall_ns': elapsed, 'old_target_kv_bytes_unchanged': unchanged,
