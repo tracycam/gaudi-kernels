@@ -32,6 +32,10 @@ class NativeExpertTP(torch.nn.Module):
         return output
 
     def _grouped_forward(self, x, ids, routing):
+        # The graph input contract must already match the custom-op contract;
+        # do not let replayV3 bind an int64 router tensor to an int32 view.
+        ids = ids.to(torch.int32).contiguous()
+        routing = routing.to(torch.float32).contiguous()
         if torch.hpu.is_current_stream_capturing():
             # An enclosing model graph already removes construction overhead.
             # Append operators to that graph instead of attempting nested capture.
