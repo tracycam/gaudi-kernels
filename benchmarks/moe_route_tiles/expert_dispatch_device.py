@@ -9,6 +9,8 @@ p=argparse.ArgumentParser()
 p.add_argument('--tokens',type=int,choices=(8,32,128,512,513),required=True)
 p.add_argument('--thresholds',type=int,nargs='+',default=[64])
 p.add_argument('--partition-library',type=Path,required=True)
+p.add_argument('--decoder',choices=('historical','k8'),default='historical')
+p.add_argument('--empty-mode',type=int,choices=(0,1,2),default=0)
 p.add_argument('--trials',type=int,default=2)
 p.add_argument('--states',nargs='+',default=['checkpoint','hot8','balanced32','mixed','permuted','zero','restored'])
 a=p.parse_args();root=Path(__file__).resolve().parents[2];out=Path(os.environ['PROBE_OUT'])
@@ -40,7 +42,7 @@ torch.ops.load_library(str(a.partition_library.resolve()))
 torch.set_num_threads(4)
 def sync():hc.mark_step();torch.hpu.synchronize()
 def bits(x,y):return torch.equal(x.contiguous().view(torch.uint8),y.contiguous().view(torch.uint8))
-report=dict(status='running',tokens=a.tokens,thresholds=a.thresholds,checks=[],timing=[],
+report=dict(status='running',tokens=a.tokens,thresholds=a.thresholds,decoder=a.decoder,empty_mode=a.empty_mode,checks=[],timing=[],
  scope='TP-local real checkpoint weights, full routed GP/gate/down/combine and consumer; not model or serving acceptance',
  production_default_changed=False,precision_policy='W4A16 FP32 accumulation; rounding policy deferred')
 def save():(out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -69,7 +71,7 @@ try:
    x=owners['x'].clone();ids=owners['ids'].int().clone();routing=owners['routing'].float().clone()
    args=(x,ids,routing,owners['gp'],owners['gs'],owners['dp'],owners['ds'],owners['table'],owners['directions'])
    if variant=='broadcast':y=batch_ops.moe(*args,mode='broadcast');return y,y+.03125
-   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug)
+   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug,decoder=a.decoder,empty_mode=a.empty_mode)
    return value if debug else (value,value+.03125)
   for variant in variants:
    graph,stream=torch.hpu.HPUGraph(),torch.hpu.Stream()
