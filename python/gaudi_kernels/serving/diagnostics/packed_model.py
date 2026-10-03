@@ -35,6 +35,11 @@ def on_worker(worker, plan):
                          starts[i], 'decode' if n == 1 else ('verify' if i == 1 else 'prefill'), tuple(range(n)))
                          for i, n in enumerate(rows))
         batch = TokenBatch(requests, BatchCapacity(sum(rows) + 11, len(rows) + 1, sum(rows) + 1))
+        original_slots = {request.request_id: packed.session.committed.get(request.request_id, ())
+                          for request in requests}
+        live_rows = sum(starts)
+        past_storage = {name: tuple(tensor[:live_rows].cpu() for tensor in tensors)
+                        for name, tensors in packed.session.caches.items()}
         calls = []
         handles = []
         def hook(name):
@@ -105,15 +110,23 @@ def on_worker(worker, plan):
         row['future_request_isolation_exact'] = torch.equal(actual_logits[unaffected], mutated_logits[unaffected])
         packed.abort(mutated)
         candidate = packed.execute(batch)
-        # Reject candidate suffixes; compare continuation with a fresh committed reference.
+        row['live_history_bytes_unchanged'] = all(torch.equal(saved.contiguous().view(torch.uint8),
+            tensor[:live_rows].cpu().contiguous().view(torch.uint8))
+            for name, tensors in packed.session.caches.items() for saved, tensor in zip(past_storage[name], tensors))
+        # Reject candidate suffixes; retain the independent sequential oracle's
+        # original history and only its accepted rows. Rebuilding the whole
+        # history as one prefill changes QKV A8/A16 and is not a KV oracle.
         prefixes = case['commits']
         packed.commit(candidate, tuple(prefixes))
-        continuation = PackedTargetExecutor(runner, kv_capacity=capacity)
-        for index, (past, request, count) in enumerate(zip(histories, requests, prefixes)):
-            tokens = (*past, *request.token_ids[:count])
-            if tokens:
-                value = continuation.execute(TokenBatch((RequestTokens(str(index), tokens, 0, 'prefill'),)))
-                continuation.commit(value, (len(tokens),))
+        continuation = sequential
+        for request, count in zip(requests, prefixes):
+            slots = continuation.session.committed[request.request_id]
+            continuation.session.committed[request.request_id] = slots[:request.start_position + count]
+        row['continuation_reference'] = 'original history plus token-at-a-time accepted prefix; no history re-quantization'
+        row['commit_slot_coverage_exact'] = all(
+            packed.session.committed[request.request_id] == (*original_slots[request.request_id],
+                                                           *candidate.transaction.candidate_slots[index][:count])
+            for index, (request, count) in enumerate(zip(requests, prefixes)))
         following = TokenBatch(tuple(RequestTokens(str(i), (211 + i,), starts[i] + prefixes[i], 'decode')
                                      for i in range(len(rows))))
         actual_next = packed.execute(following)
@@ -135,6 +148,8 @@ def on_worker(worker, plan):
         (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     report['pass'] = all(c['all_query_pass'] and c['continuation_pass'] and c['every_shared_call_compact']
                          and c['future_request_isolation_exact']
+                         and c['commit_slot_coverage_exact']
+                         and c['live_history_bytes_unchanged']
                          and c.get('serving_teacher_pass', True)
                          for c in report['cases'])
     (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
