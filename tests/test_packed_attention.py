@@ -40,6 +40,7 @@ class PackedAttentionTests(unittest.TestCase):
         forward_packed(impl, layer, q, k, v, initial)
         arena.commit(initial, (2,))
         before = tuple(t[:2].clone() for t in arena.caches['layer'])
+        pointers = tuple(t.data_ptr() for t in arena.caches['layer'])
         candidate = arena.prepare(TokenBatch((RequestTokens('a', (3, 4, 5), 2, 'verify'),)))
         forward_packed(impl, layer, q[:1].expand(3, -1, -1), k[:1].expand(3, -1, -1)*2,
                        v[:1].expand(3, -1, -1)*2, candidate)
@@ -47,6 +48,7 @@ class PackedAttentionTests(unittest.TestCase):
             arena.commit(candidate, (4,))
         self.assertIs(arena.pending, candidate)
         arena.commit(candidate, (1,))
+        self.assertEqual(tuple(t.data_ptr() for t in arena.caches['layer']), pointers)
         following = arena.prepare(TokenBatch((RequestTokens('a', (6,), 3, 'decode'),)))
         self.assertEqual(arena.committed['a'], (0, 1, 2))
         self.assertEqual(following.candidate_slots, ((3,),))

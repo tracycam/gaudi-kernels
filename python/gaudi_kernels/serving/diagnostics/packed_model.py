@@ -69,6 +69,23 @@ def on_worker(worker, plan):
                'hidden_max_abs': delta.abs().max().item(),
                'all_query_pass': all(check['pass'] for check in checks),
                'every_shared_call_compact': bool(calls) and all(call['rows'] == sum(rows) for call in calls)}
+        # Mutate only future verify queries; neither prior logits nor other
+        # requests may change. This detects masks and cross-row quantization.
+        packed.abort(candidate)
+        changed = list(requests)
+        request = changed[1]
+        changed[1] = RequestTokens(request.request_id,
+            tuple(token if local < 2 else (token + 307) % vocabulary
+                  for local, token in enumerate(request.token_ids)),
+            request.start_position, request.kind, request.output_rows)
+        mutated = packed.execute(TokenBatch(tuple(changed), batch.capacity))
+        mutated_logits = mutated.logits.cpu()
+        unaffected = list(range(batch.num_tokens))
+        for local in range(2, request.query_length):
+            unaffected.remove(batch.query_start_loc[1] + local)
+        row['future_request_isolation_exact'] = torch.equal(actual_logits[unaffected], mutated_logits[unaffected])
+        packed.abort(mutated)
+        candidate = packed.execute(batch)
         # Reject candidate suffixes; compare continuation with a fresh committed reference.
         prefixes = case['commits']
         packed.commit(candidate, tuple(prefixes))
@@ -98,8 +115,8 @@ def on_worker(worker, plan):
         report['cases'].append(row)
         (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     report['pass'] = all(c['all_query_pass'] and c['continuation_pass'] and c['every_shared_call_compact']
+                         and c['future_request_isolation_exact']
                          for c in report['cases'])
     (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     return report
-
 

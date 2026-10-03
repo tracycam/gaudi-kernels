@@ -138,15 +138,16 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
     query = query.reshape(rows, impl.num_heads, impl.head_size)
     key = key.reshape(rows, impl.num_kv_heads, impl.head_size)
     value = value.reshape(rows, impl.num_kv_heads, impl.head_size_v)
-    key_cache = key_cache.index_copy(0, metadata.slot_mapping, key.to(key_cache.dtype))
-    value_cache = value_cache.index_copy(0, metadata.slot_mapping, value.to(value_cache.dtype))
+    key_cache = key_cache.index_copy_(0, metadata.slot_mapping, key.to(key_cache.dtype))
+    value_cache = value_cache.index_copy_(0, metadata.slot_mapping, value.to(value_cache.dtype))
     session.caches[layer.layer_name] = (key_cache, value_cache)
     segments = []
     for index, request in enumerate(metadata.batch.requests):
         begin, end = metadata.batch.query_start_loc[index:index + 2]
-        slots = metadata.visible_slots[index]
+        past_start = max(0, request.start_position - impl.sliding_window + 1) if impl.sliding_window else 0
+        slots = metadata.visible_slots[index][past_start:]
         segments.append(tiled_attention(query[begin:end], key_cache.index_select(0, slots),
-            value_cache.index_select(0, slots), metadata.query_positions[index], metadata.key_positions[index],
+            value_cache.index_select(0, slots), metadata.query_positions[index], metadata.key_positions[index][past_start:],
             scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks))
     result = torch.cat(segments)
     if output is not None:
