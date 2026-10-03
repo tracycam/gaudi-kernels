@@ -48,6 +48,18 @@ class DeviceTraceTests(unittest.TestCase):
         self.assertEqual(duration([]), 0)
         self.assertEqual(duration([(1, 4), (2, 3), (4, 5)]), 4)
 
+    def test_overlapping_descriptors_can_reuse_context_id(self):
+        metadata = self.fixture()[:5]
+        spans = [dict(ph=phase, pid=3, tid=52, id=123, ts=t, name='DmaBroadcast', cat='SP8')
+                 for phase, t in (('B', 0), ('B', 1), ('E', 2), ('E', 3))]
+        for event in spans[2:]:
+            event['cat'] = 'SP15'
+        # Descriptor sum would be4us, but physical occupancy is3us.
+        result = self.check(metadata+spans)['average_per_replay_ms']
+        self.assertEqual(result['PDMA'], .003)
+        with self.assertRaisesRegex(ValueError, 'Unclosed'):
+            self.check(metadata+spans[:-1])
+
 
 if __name__ == '__main__':
     unittest.main()

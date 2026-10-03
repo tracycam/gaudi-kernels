@@ -5,6 +5,7 @@ Trace timestamps are microseconds. They are not aligned to host monotonic time.
 Multiple TPC cores/MME lanes are unioned, never added as wall time.
 """
 import argparse
+from collections import deque
 import json
 from pathlib import Path
 
@@ -52,15 +53,20 @@ def analyze(path, replays):
     for event in events(path):
         if event.get('pid') not in processes or event.get('ph') not in ('B', 'E'):
             continue
-        key = (event['pid'], event['tid'], event['id'])
+        # SP categories can differ between descriptor issue/completion. The
+        # physical engine/thread/context/node identifies the queued interval.
+        key = (event['pid'], event['tid'], event['id'], event.get('name', ''))
         if event['ph'] == 'B':
-            if key in pending:
-                raise ValueError('Duplicate begin event')
-            pending[key] = event['ts']
+            # DMA descriptors from the same node can overlap while reusing
+            # contextId. Queue-order completion pairs these repeated spans;
+            # their physical union is counted once, never as descriptor sums.
+            pending.setdefault(key, deque()).append(event['ts'])
         else:
             if key not in pending:
                 raise ValueError('End without begin event')
-            begin = pending.pop(key)
+            begin = pending[key].popleft()
+            if not pending[key]:
+                del pending[key]
             if event['ts'] < begin:
                 raise ValueError('Negative engine interval')
             intervals[processes[event['pid']]].append((begin, event['ts']))
