@@ -6,6 +6,16 @@ from gaudi_kernels.serving.model_adapter import adapter_class
 
 
 class NativeHPUModelRunner(hpu.HPUModelRunner):
+    def _prepare_inputs(self, scheduler_output, num_prefills, num_decodes, warmup=False):
+        # Observe the scheduling source before the legacy plugin separates
+        # prefill/decode and pads queries. No extra packing in timed replay.
+        self._scheduled_token_batch = None
+        transfers = getattr(self, '_native_transfers', None)
+        if not warmup and transfers is not None and transfers.audit_inputs is not None:
+            from gaudi_kernels.serving.executor.scheduled_tokens import from_vllm
+            self._scheduled_token_batch = from_vllm(self.input_batch, scheduler_output, self.requests)
+        return super()._prepare_inputs(scheduler_output, num_prefills, num_decodes, warmup)
+
     def _create_decode_input_data(self, num_decodes, num_scheduled_tokens, context_lens,
                                   block_table_cpu_tensor, scheduler_output=None):
         result=super()._create_decode_input_data(num_decodes,num_scheduled_tokens,context_lens,
