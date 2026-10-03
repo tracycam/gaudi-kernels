@@ -8,6 +8,8 @@ from gaudi_kernels.serving.host_placement import snapshot as host_snapshot
 
 class NativeHPUWorker(HPUWorker):
     def load_model(self, *args, **kwargs):
+        from gaudi_kernels.serving.packed_backend import register
+        register()
         result = super().load_model(*args, **kwargs)
         from gaudi_kernels.engine.context import context
         configure_policy(self, context().selection.to_dict())
@@ -23,6 +25,10 @@ class NativeHPUWorker(HPUWorker):
     def get_model_runner_cls(self):
         from gaudi_kernels.serving.runner import NativeHPUModelRunner
         return NativeHPUModelRunner
+
+    def packed_target_probe(self, plan):
+        from gaudi_kernels.serving.diagnostics.packed_model import on_worker
+        return on_worker(self, plan)
 
     def scheduled_token_audit(self, enabled=None, clear=False):
         """Bounded source-level diagnostics; no tensor values or device access."""
