@@ -115,7 +115,7 @@ class DFlashCycle:
             self.failed = True
             raise
 
-    def commit_after_delivery(self, result):
+    def finish_at_output_boundary(self, result):
         """Apply the delivered device-selected prefixes after device completion.
 
         This eager implementation drains at the output boundary. A native

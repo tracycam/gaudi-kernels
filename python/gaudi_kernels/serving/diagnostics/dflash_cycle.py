@@ -85,7 +85,7 @@ def on_worker(worker, plan):
             began = time.perf_counter_ns()
             metadata = target.session.prepare(schedule)
             result = coordinator.run_prepared(schedule, metadata, anchors, remaining)
-            output = coordinator.commit_after_delivery(result)
+            output = coordinator.finish_at_output_boundary(result)
             elapsed = time.perf_counter_ns()-began
             emitted = tuple(len(row.emitted_tokens) for row in output.requests)
             anchors = result.next_anchor_ids.clone()

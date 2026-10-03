@@ -57,13 +57,13 @@ class DFlashCycleTests(unittest.TestCase):
             schedule = QueryBatch((RequestQueries('a', 4, start, 'verify'),))
             meta = target.session.prepare(schedule)
             result = cycle.run_prepared(schedule, meta, anchor, torch.tensor([budget], dtype=torch.int32))
-            delivered = cycle.commit_after_delivery(result)
+            delivered = cycle.finish_at_output_boundary(result)
             self.assertEqual(delivered.requests[0].emitted_tokens, want)
             self.assertEqual(delivered.requests[0].committed_queries, len(want))
             self.assertEqual(len(target.session.committed['a']), start+len(want))
             anchor = result.next_anchor_ids
             with self.assertRaises(ValueError):
-                cycle.commit_after_delivery(result)
+                cycle.finish_at_output_boundary(result)
         _, positions, valid = cycle.context.state()
         self.assertEqual(positions[valid].tolist(), list(range(6)))
         self.assertEqual(anchor.tolist(), [16])
