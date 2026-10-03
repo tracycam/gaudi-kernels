@@ -42,6 +42,10 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.packed_features import on_worker
         return on_worker(self, feature_layers, native_swa)
 
+    def dflash_cycle_probe(self, plan):
+        from gaudi_kernels.serving.diagnostics.dflash_cycle import on_worker
+        return on_worker(self, plan)
+
     def packed_scheduled_configure(self, enabled):
         from gaudi_kernels.engine.context import context
         runner = self.model_runner

@@ -29,7 +29,15 @@ def main():
                    help='Report floating regression thresholds without blocking finite/KV/causality functional diagnostics')
     p.add_argument('--swa-witness', action='store_true',
                    help='Freeze native SWA operands/output for a small diagnostic, never for timing')
+    p.add_argument('--dflash-cycle', action='store_true',
+                   help='Run actual checkpoint drafter/target/acceptance/context cycles after target diagnostics')
+    p.add_argument('--cycle-prompts', type=Path,
+                   help='Private JSON list of prompt_token_ids objects; never published with source')
+    p.add_argument('--cycle-steps', type=int, default=4)
+    p.add_argument('--cycle-verify-rows', type=int, default=4)
     args = p.parse_args()
+    if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
+        p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
     from vllm import LLM, SamplingParams
@@ -107,6 +115,18 @@ def main():
             result['target_features'] = llm.collective_rpc('packed_feature_probe', args=(layers, args.native_packed_swa))
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
+        if args.dflash_cycle:
+            prompts = json.loads(args.cycle_prompts.read_text())
+            cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts],
+                          'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
+                          'cycles': args.cycle_steps, 'verify_rows': args.cycle_verify_rows}
+            result['dflash_cycles'] = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
+            if len(result['dflash_cycles']) != 8 or not all(r['pass'] for r in result['dflash_cycles']):
+                raise RuntimeError('Real DFlash/target cycle functional check failed')
+            emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in result['dflash_cycles']]
+            result['dflash_replicas_equal'] = all(values == emitted[0] for values in emitted)
+            if not result['dflash_replicas_equal']:
+                raise RuntimeError('DFlash/target emitted IDs differ across TP ranks')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
         result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})
