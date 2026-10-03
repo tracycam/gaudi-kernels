@@ -145,13 +145,18 @@ def main():
                     emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in ranks]
                     equal = len(ranks) == 8 and all(values == emitted[0] for values in emitted)
                     entry = dict(batch=batch, verify_rows=extent, ranks=ranks, replicas_equal=equal)
+                    routes_equal = True
+                    if args.cycle_routes:
+                        routes = [[c['route_distribution'] for c in rank['cycles']] for rank in ranks]
+                        routes_equal = len(ranks) == 8 and all(values == routes[0] for values in routes)
+                        entry['route_replicas_equal'] = routes_equal
                     result['dflash_sweep'].append(entry)
                     if not sweep:
                         result.update(dflash_cycles=ranks, dflash_replicas_equal=equal)
                     # Persist each case before the next RPC. A later case's
                     # failure cannot erase already completed private evidence.
                     (args.out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
-                    if len(ranks) != 8 or not all(r['pass'] for r in ranks) or not equal:
+                    if len(ranks) != 8 or not all(r['pass'] for r in ranks) or not equal or not routes_equal:
                         raise RuntimeError('Real DFlash/target functional or TP-replica check failed')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
