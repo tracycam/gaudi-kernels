@@ -97,11 +97,14 @@ The old broadcast MoE `nm_gemv` family occupies22.60ms; block-FP8 decoding
 occupies2.92ms. Profiling is intrusive and these windows are not service TPS.
 
 The exact loaded GP ELF/.text hashes were checked against the qualified pins,
-then disassembled with the TPC triple. Its K32 hardware-loop body contains248
+then disassembled with the TPC triple. Its K32 hardware-loop body contains247
 logical VLIW packets,215 occupied VPU slots,128 BF16 FP32-accumulating MACs,
 eight FP32 scale MACs and32 activation shuffles. The four accumulator chains
 recur at six-packet distance. Embedded C source/basic-block labels are stale
 after previous manual ISA edits; optimization must use the actual binary.
+The initial248 count included the nonrepeated LOOP delay NOP at0xd20. Pinned
+TPC LLVM `7f67b4e2` inserts that delay slot separately; the repeated body starts
+at0xd40. The occupied-slot and MAC counts are unchanged.
 
 Folding GQA query heads into M is functionally sound on the tested cohorts:
 all eight ranks' proposals, target-next IDs, emitted IDs and accepted lengths
@@ -109,6 +112,11 @@ match the broadcast version. It is kept explicit/experimental. The median of
 the **maximum rank duration per synchronized step** was40.56→41.01ms for B1
 and77.26→83.37ms for B3. Rank0 alone misleadingly suggested a gain; neither
 cohort timing nor physical compute unions establishes one.
+The unprofiled cohorts also performed full-KV CPU snapshots before the narrow
+timer, without aligning rank readiness. Early ranks can measure waits for
+peer diagnostic copies. Later source explicitly aligns after snapshots and
+records audit costs; prior timing remains diagnostic evidence, not a clean
+performance adjudication or service throughput.
 
 Unchanged compact GP/gate/vector-down/combine ELFs were tested directly on
 loaded two-layer model expert weights at8/12/16/24 rows, on all eight ranks.
