@@ -9,6 +9,7 @@ p=argparse.ArgumentParser()
 p.add_argument('--tokens',type=int,choices=(8,32,128,512,513),required=True)
 p.add_argument('--thresholds',type=int,nargs='+',default=[64])
 p.add_argument('--partition-library',type=Path,required=True)
+p.add_argument('--padding-mode',type=int,choices=(0,1,2))
 p.add_argument('--tpc-schedule',choices=('contiguous','queue'),default='contiguous')
 p.add_argument('--max-slots',type=int,default=0)
 p.add_argument('--row-caps',type=int,nargs='*',default=[])
@@ -45,7 +46,7 @@ torch.ops.load_library(str(a.partition_library.resolve()))
 torch.set_num_threads(4)
 def sync():hc.mark_step();torch.hpu.synchronize()
 def bits(x,y):return torch.equal(x.contiguous().view(torch.uint8),y.contiguous().view(torch.uint8))
-report=dict(status='running',tokens=a.tokens,thresholds=a.thresholds,decoder=a.decoder,empty_mode=a.empty_mode,checks=[],timing=[],
+report=dict(status='running',tokens=a.tokens,thresholds=a.thresholds,decoder=a.decoder,empty_mode=a.empty_mode,padding_mode=a.padding_mode,tpc_schedule=a.tpc_schedule,checks=[],timing=[],
  scope='TP-local real checkpoint weights, full routed GP/gate/down/combine and consumer; not model or serving acceptance',
  production_default_changed=False,precision_policy='W4A16 FP32 accumulation; rounding policy deferred')
 def save():(out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -74,7 +75,7 @@ try:
    x=owners['x'].clone();ids=owners['ids'].int().clone();routing=owners['routing'].float().clone()
    args=(x,ids,routing,owners['gp'],owners['gs'],owners['dp'],owners['ds'],owners['table'],owners['directions'])
    if variant=='broadcast':y=batch_ops.moe(*args,mode='broadcast');return y,y+.03125
-   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug,decoder=a.decoder,empty_mode=a.empty_mode,tpc_schedule=a.tpc_schedule)
+   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug,decoder=a.decoder,empty_mode=a.empty_mode,tpc_schedule=a.tpc_schedule,padding_mode=a.padding_mode)
    return value if debug else (value,value+.03125)
   for variant in variants:
    graph,stream=torch.hpu.HPUGraph(),torch.hpu.Stream()
@@ -109,7 +110,11 @@ try:
       want=reference_partition(inputs['ids'].tolist(),384,item['bucket'])
       got={k:item[k].cpu() for k in ('experts','valid','status','inverse','mapping')}
       for key,target in [('experts','tile_expert'),('valid','valid_rows'),('status','status'),('inverse','inverse'),('mapping','row_map')]:
-       assert torch.equal(got[key],torch.tensor(want[target],dtype=torch.int32)),(state,variant,key)
+       expected=torch.tensor(want[target],dtype=torch.int32)
+       if key=='mapping' and a.padding_mode is not None:
+        needed=expected>=0
+        assert torch.equal(got[key][needed],expected[needed]),(state,variant,key)
+       else:assert torch.equal(got[key],expected),(state,variant,key)
       metadata.append(dict(bucket=item['bucket'].__dict__,**got))
      delta=y-actual['broadcast'];check['baseline_relative_l2']=float(delta.norm()/actual['broadcast'].norm().clamp_min(1e-30));check['baseline_max_abs']=float(delta.abs().max())
     torch.save(dict(y=y,inputs=inputs,counts=counts,metadata=metadata),out/f'{state}-{variant}.pt')

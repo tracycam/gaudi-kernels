@@ -8,7 +8,7 @@ import torch
 from .moe_expert_plan import ExpertPlan
 
 
-def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="historical", empty_mode=0, tpc_schedule="contiguous"):
+def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="historical", empty_mode=0, tpc_schedule="contiguous", padding_mode=None):
     if type(plan) is not ExpertPlan or x.ndim != 2 or ids.ndim != 2:
         raise ValueError('explicit expert plan and token/route matrices required')
     t,r=ids.shape
@@ -24,6 +24,8 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
                 or value.device.type not in ('hpu','meta') or not value.is_contiguous()
                 or value.requires_grad):
             raise ValueError('expert-M weight/activation/layout contract')
+    if padding_mode is not None and (type(padding_mode) is not int or padding_mode not in (0,1,2)):
+        raise ValueError('explicit counted padding policy required')
     if tpc_schedule not in ('contiguous','queue'):
         raise ValueError('explicit TPC schedule required')
     if decoder not in ('historical','k8') or type(empty_mode) is not int or empty_mode not in (0,1,2):
@@ -47,7 +49,7 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
     for b in cost['buckets']:
         prefix,experts,base,valid,status=op.prefix(counts,flags,r,b.rows,b.slots,b.lower,b.upper,int(b.fallback_overflow))
         inverse=op.inverse(ids,flat,prefix,status,offsets,b.rows,b.slots)
-        mapping=op.row_map(inverse,valid,status,b.rows)
+        mapping=(op.row_map if padding_mode is None else op.sparse_map)(inverse,valid,status,b.rows)
         buckets.append((b,experts,valid,status,inverse,mapping))
     if plan.min_mme_rows==1 and not plan.max_slots_per_bucket:
         result=torch.zeros_like(x,dtype=torch.float32)
@@ -84,7 +86,7 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
         gates=[]
         for slot in range(0,b.slots,2):
             batch=min(2,b.slots-slot)
-            a=op.gather(x,mapping,status,r,b.rows,slot,batch)
+            a=(op.gather(x,mapping,status,r,b.rows,slot,batch) if padding_mode is None else op.counted_gather(x,mapping,valid,status,r,b.rows,slot,batch,padding_mode))
             w=decode(gp,gs,6144,512,512,slot,batch,0,ids_view)
             gates.append(op.gate(core.batch_mm(a,w),valid,status,slot))
         groups=[]
