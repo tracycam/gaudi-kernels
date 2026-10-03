@@ -59,7 +59,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKerne
   out->indexSpaceGeometry[0]=y[0].geometry.maxSizes[0]/256;out->indexSpaceGeometry[1]=y[0].geometry.maxSizes[1]/32;out->indexSpaceGeometry[2]=y[0].geometry.maxSizes[2];
   map(o,0,0,256,255);map(o,1,1,32,31);map(o,2,2,1,0);
  }
- else{unsigned w=y[0].geometry.maxSizes[0],c=y[0].geometry.maxSizes[1],b=y[0].geometry.maxSizes[2],v=id==5?64:128;
+ else{unsigned w=y[0].geometry.maxSizes[0],c=y[0].geometry.maxSizes[1],b=y[0].geometry.maxSizes[2],v=id==5?256:128;
   auto&o=out->outputTensorAccessPattern[0];out->indexSpaceRank=id==5?2:3;
   out->indexSpaceGeometry[0]=(id==3||id==10)?c:w/v;out->indexSpaceGeometry[1]=(id==3||id==10)?w/v:c;
   map(o,0,(id==3||id==10)?1:0,v,v-1);map(o,1,(id==3||id==10)?0:1,1,0);

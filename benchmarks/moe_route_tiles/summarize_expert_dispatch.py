@@ -5,7 +5,7 @@ p=argparse.ArgumentParser();p.add_argument('--results',type=Path,required=True);
 rows=[];cases=[]
 for f in sorted(a.results.glob('*/result.json')):
  d=json.loads(f.read_text());cases.append(dict(case=f.parent.name,status=d['status'],error=d.get('error')))
- if not d['status'].startswith('passed_'):continue
+ if not d['status'].startswith('passed_') or (f.parent/'profile.json').exists():continue
  groups=collections.defaultdict(list)
  for x in d['timing']:groups[x['state'],x['pair'],x['trial']].append(x)
  grouped=collections.defaultdict(list)
@@ -17,5 +17,5 @@ for f in sorted(a.results.glob('*/result.json')):
  for (state,pair),trials in grouped.items():
   check=next(x for x in d['checks'] if x['state']==state and x['variant']==pair)
   rows.append(dict(case=f.parent.name,tokens=d['tokens'],state=state,variant=pair,active_experts=check['active_experts'],max_expert_m=check['max_expert_m'],baseline_us=statistics.median(x['baseline_us'] for x in trials),candidate_us=statistics.median(x['candidate_us'] for x in trials),candidate_over_baseline=statistics.median(x['ratio'] for x in trials),trials=trials,relative_l2_to_broadcast=check.get('baseline_relative_l2'),plan=d['plans'][pair]))
-report=dict(scope='Single-module complete producer/MoE/consumer HPU Graph event time. Fixed hot/cold replay; no physical HBM-counter claim, model TPS or universal dispatch promotion.',cases=cases,measurements=rows)
+report=dict(scope='Single-module complete producer/MoE/consumer HPU Graph event time. Fixed input replay; no physical HBM-counter claim, model TPS or universal dispatch promotion.',cases=cases,measurements=rows)
 a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(report,indent=2)+'\n');print(len(rows),'paired measurements')
