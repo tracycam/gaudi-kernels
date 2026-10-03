@@ -35,6 +35,11 @@ def on_worker(worker, plan):
                          starts[i], 'decode' if n == 1 else ('verify' if i == 1 else 'prefill'), tuple(range(n)))
                          for i, n in enumerate(rows))
         batch = TokenBatch(requests, BatchCapacity(sum(rows) + 11, len(rows) + 1, sum(rows) + 1))
+        trace = None
+        if plan.get('trace_layers') and case['name'] == 'serving-teacher':
+            from gaudi_kernels.serving.diagnostics.packed_boundaries import BoundaryTrace, compare_boundaries
+            trace = BoundaryTrace(packed.model, plan['trace_layers'])
+            trace.begin(batch.num_tokens)
         original_slots = {request.request_id: packed.session.committed.get(request.request_id, ())
                           for request in requests}
         live_rows = sum(starts)
@@ -55,18 +60,23 @@ def on_worker(worker, plan):
             candidate = packed.execute(batch)
             actual_hidden = candidate.hidden.detach().cpu().clone()
             actual_logits = candidate.logits.detach().cpu().clone()
+            candidate_boundaries = trace.freeze() if trace else None
         finally:
             for handle in handles:
                 handle.remove()
         after_branches = block_snapshot()['python_apply_branch_counts']
         branch_delta = {key: value - before_branches.get(key, 0) for key, value in after_branches.items()
                         if value != before_branches.get(key, 0)}
-        reference_hidden, reference_logits = [], []
+        reference_hidden, reference_logits, reference_boundaries = [], [], []
         for request in requests:
             for local, token in enumerate(request.token_ids):
                 single = TokenBatch((RequestTokens(request.request_id, (token,), request.start_position + local,
                                                    'decode', (0,)),))
+                if trace:
+                    trace.begin(1)
                 output = sequential.execute(single)
+                if trace:
+                    reference_boundaries.append(trace.freeze())
                 sequential.commit(output, (1,))
                 reference_hidden.append(output.hidden.cpu())
                 reference_logits.append(output.logits.cpu())
@@ -83,6 +93,13 @@ def on_worker(worker, plan):
                'hidden_max_abs': delta.abs().max().item(),
                'all_query_pass': all(check['pass'] for check in checks),
                'every_shared_call_compact': bool(calls) and all(call['rows'] == sum(rows) for call in calls)}
+        if trace:
+            trace.close()
+            row['operator_boundaries'] = compare_boundaries(candidate_boundaries, reference_boundaries)
+            root = context().startup.run_dir/'packed-operator-boundaries'
+            root.mkdir(exist_ok=True)
+            torch.save({'candidate': candidate_boundaries, 'sequential': reference_boundaries},
+                       root/f'rank{worker.rank}.pt')
         if 'serving_rows' in case:
             cache = {}
             teacher_checks = []

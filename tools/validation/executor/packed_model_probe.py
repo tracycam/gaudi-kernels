@@ -21,6 +21,8 @@ def main():
                    help='Update recorded token/position/KV bindings across accepted/rejected input prefixes')
     p.add_argument('--target-features', action='store_true',
                    help='Audit real residual-completed target features at independently hooked decoder boundaries')
+    p.add_argument('--trace-layers', type=int, nargs='+', default=(),
+                   help='Freeze operator input/output boundaries for serving-teacher diagnosis')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -41,6 +43,10 @@ def main():
     llm = LLM(**opts)
     llm.collective_rpc('native_configure', args=(False, False, False, 'compact'))
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
+    if args.trace_layers:
+        if any(i < 0 or i >= args.layers for i in args.trace_layers) or not args.serving_teacher:
+            raise ValueError('Boundary tracing requires valid decoder indices and serving teacher')
+        plan['trace_layers'] = tuple(args.trace_layers)
     if not args.small_only:
         plan['cases'].append({'name': 'ragged-133', 'rows': [1, 4, 128], 'starts': [127, 126, 0], 'commits': [0, 2, 128]})
     if args.serving_teacher:
