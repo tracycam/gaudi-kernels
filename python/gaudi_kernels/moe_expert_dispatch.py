@@ -35,7 +35,7 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
         raise ValueError('expert-M conservative workspace bound exceeds budget')
     if not cost['buckets']:
         result=tpc(x,ids,routing,gp,gs,down,ds,lut,directions)
-        return (result,None,()) if debug else result
+        return (result,None,(),None) if debug else result
     old=torch.ops.gaudi_route_metadata_v3
     op=torch.ops.gaudi_expert_partition
     core=torch.ops.gaudi_moe_reference
@@ -69,6 +69,9 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
             p=op.queue_gemv(down,ds,gate,lut,mapping,down_queue)
             # Same frozen FP32 combine and historical lane restoration as tpc.
             result=torch.ops.precision_fix.combine(p,masked_routing,directions,6144)
+    tpc_compare=None
+    if debug and tpc_schedule=='queue' and not (plan.min_mme_rows==1 and not plan.max_slots_per_bucket):
+        tpc_compare=(result.clone(),tpc(x,ids,routing,gp,gs,down,ds,lut,directions,route_mask=small))
     def decode(w,s,k,n,nt,slot,batch,nb,ids_view):
         if decoder=='historical':return core.decode(w,s,lut,ids_view,k,n,nt,slot,batch,nb,1)
         return op.decode(w,s,lut,ids_view,k,n,nt,slot,batch,nb,empty_mode)
@@ -102,4 +105,4 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
         if debug:
             debug_metadata.append(dict(bucket=b,experts=experts.clone(),valid=valid.clone(),
                                        status=status.clone(),inverse=inverse.clone(),mapping=mapping.clone()))
-    return (result,counts.clone(),tuple(debug_metadata)) if debug else result
+    return (result,counts.clone(),tuple(debug_metadata),tpc_compare) if debug else result

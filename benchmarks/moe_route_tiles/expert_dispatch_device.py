@@ -99,7 +99,10 @@ try:
     metadata=[]
     if variant!='broadcast':
      debug_graphs[variant].replay(asynchronous=True);sync()
-     dy,dc,meta=debug_outputs[variant]
+     dy,dc,meta,tpc_compare=debug_outputs[variant]
+     if tpc_compare is not None:
+      check["queued_tpc_bit_equal"]=bits(*(v.cpu() for v in tpc_compare))
+      assert check["queued_tpc_bit_equal"],check
      check['debug_y_equal']=bits(dy.cpu(),y);check['counts_equal']=torch.equal(dc.cpu(),counts.int())
      assert check['debug_y_equal'] and check['counts_equal'],check
      for item in meta:
