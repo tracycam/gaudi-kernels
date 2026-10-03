@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import torch
 
+from gaudi_kernels.engine.token_batch import TokenBatch
+
 from gaudi_kernels.serving.executor.packed_attention import PackedAttentionMetadata
 
 
@@ -17,7 +19,9 @@ class PackedInputBuffers:
         self.ids = torch.empty(batch.num_tokens, dtype=torch.int32, device=device)
         self.positions = torch.empty(batch.num_tokens, dtype=torch.int64, device=device)
         self.logits_indices = torch.tensor(batch.logits_indices, dtype=torch.int64, device=device)
-        self.update(batch)
+        self._batch = None
+        if type(batch) is TokenBatch:
+            self.update(batch)
 
     @staticmethod
     def _signature(batch):
@@ -34,6 +38,17 @@ class PackedInputBuffers:
         # Values change in place; graph-owned input addresses remain stable.
         self.ids.copy_(torch.tensor(encoded['token_ids'][:batch.num_tokens], dtype=self.ids.dtype))
         self.positions.copy_(torch.tensor(encoded['positions'][:batch.num_tokens], dtype=self.positions.dtype))
+        self._batch = batch
+
+    def update_device(self, batch, token_ids, positions):
+        """Feed drafter output to the target without reading device IDs on CPU."""
+        if (self._signature(batch) != self.signature or token_ids.shape != self.ids.shape or
+                positions.shape != self.positions.shape or token_ids.device != self.ids.device or
+                positions.device != self.positions.device or
+                token_ids.dtype not in (torch.int32, torch.int64) or positions.dtype not in (torch.int32, torch.int64)):
+            raise ValueError('Device token/position bindings differ from declared query extents')
+        self.ids.copy_(token_ids)
+        self.positions.copy_(positions)
         self._batch = batch
 
 

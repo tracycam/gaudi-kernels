@@ -79,8 +79,8 @@ class PackedTargetExecutor:
         old_feature_layers = None
         try:
             # Deliberately exclude capacity padding before embedding/projections.
-            encoded = batch.encoded()
             if inputs is None:
+                encoded = batch.encoded()
                 ids = torch.tensor(encoded['token_ids'][:batch.num_tokens], dtype=torch.int32, device=self.runner.device)
                 positions = torch.tensor(encoded['positions'][:batch.num_tokens], dtype=torch.int64, device=self.runner.device)
                 indices = torch.tensor(batch.logits_indices, dtype=torch.int64, device=self.runner.device)

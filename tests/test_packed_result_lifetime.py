@@ -9,6 +9,7 @@ import torch
 
 from gaudi_kernels.engine.token_batch import RequestTokens, TokenBatch
 from gaudi_kernels.serving.executor.packed_target import PackedTargetExecutor
+from gaudi_kernels.serving.executor.packed_bindings import PackedInputBuffers
 
 
 class PackedResultLifetimeTests(unittest.TestCase):
@@ -63,7 +64,11 @@ class PackedResultLifetimeTests(unittest.TestCase):
                 first = executor.execute(TokenBatch((RequestTokens('r', (3,), 0, 'decode'),)))
                 self.assertEqual(model.aux_hidden_state_layers, ())
                 executor.commit(first, (1,))
-                second = executor.execute(TokenBatch((RequestTokens('r', (7,), 1, 'decode'),)))
+                query = TokenBatch((RequestTokens('r', (7,), 1, 'decode'),)).query_schedule()
+                metadata = executor.session.prepare(query)
+                inputs = PackedInputBuffers(query, 'cpu')
+                inputs.update_device(query, torch.tensor([7], dtype=torch.int32), torch.cat(metadata.query_positions))
+                second = executor.execute_prepared(query, metadata, inputs)
                 self.assertTrue(torch.equal(first.hidden, torch.full((1, 8), 3, dtype=torch.bfloat16)))
                 self.assertTrue(torch.equal(first.logits, torch.full((1, 16), 3.5)))
                 self.assertTrue(torch.equal(second.hidden, model.hidden_buffer))

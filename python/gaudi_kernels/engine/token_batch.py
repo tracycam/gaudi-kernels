@@ -69,8 +69,11 @@ class TokenBatch:
     capacity: BatchCapacity | None = None
 
     def __post_init__(self):
+        self._validate_requests(RequestTokens)
+
+    def _validate_requests(self, request_type):
         if (type(self.requests) is not tuple or not self.requests or
-                any(type(request) is not RequestTokens for request in self.requests)):
+                any(type(request) is not request_type for request in self.requests)):
             raise ValueError('A batch requires a tuple of declared requests')
         if len(set(self.request_ids)) != len(self.requests):
             raise ValueError('Duplicate request ID')
@@ -147,6 +150,57 @@ class TokenBatch:
             if request.kind != 'verify' and row.committed_queries != row.computed_queries:
                 raise ValueError('Non-speculative work must commit all computed input queries')
         return result
+
+    def query_schedule(self):
+        """Keep spans/ownership while token values travel through device buffers."""
+        return QueryBatch(tuple(RequestQueries(r.request_id, r.query_length, r.start_position,
+                                               r.kind, r.output_rows) for r in self.requests), self.capacity)
+
+
+@dataclass(frozen=True)
+class RequestQueries:
+    request_id: str
+    query_length: int
+    start_position: int
+    kind: str
+    output_rows: tuple[int, ...] | None = None
+
+    def __post_init__(self):
+        if type(self.request_id) is not str or not self.request_id:
+            raise ValueError('A nonempty request ID is required')
+        _integer(self.query_length, 'query_length', minimum=1)
+        _integer(self.start_position, 'start_position')
+        if self.start_position + self.query_length > I32_MAX:
+            raise ValueError('Query positions exceed the index ABI')
+        if self.kind not in ('decode', 'prefill', 'verify') or (self.kind == 'decode' and self.query_length != 1):
+            raise ValueError('Invalid query kind/extent')
+        selected = self.output_rows
+        if selected is None:
+            selected = tuple(range(self.query_length)) if self.kind == 'verify' else (0,) if self.kind == 'decode' else ()
+            object.__setattr__(self, 'output_rows', selected)
+        if (type(selected) is not tuple or
+                any(type(row) is not int or not 0 <= row < self.query_length for row in selected) or
+                tuple(sorted(set(selected))) != selected):
+            raise ValueError('Output rows must be distinct, ordered local query indices')
+
+
+@dataclass(frozen=True)
+class QueryBatch(TokenBatch):
+    """Same packed spans, with device-owned token values supplied separately.
+
+    No dummy CPU IDs: encoding token values is deliberately unavailable.
+    A target must receive validated device bindings before execution.
+    """
+    requests: tuple[RequestQueries, ...]
+
+    def __post_init__(self):
+        self._validate_requests(RequestQueries)
+
+    def encoded(self):
+        raise ValueError('Device query schedule has no CPU token values to encode')
+
+    def query_schedule(self):
+        return self
 
 
 @dataclass(frozen=True)

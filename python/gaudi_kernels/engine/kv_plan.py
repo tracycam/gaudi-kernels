@@ -5,7 +5,7 @@ transaction. Applying selected prefixes requires completion and backend-specific
 page promotion/tail copy. A lease is retained until reads/writes finish.
 """
 from dataclasses import dataclass
-from .token_batch import TokenBatch, _integer
+from .token_batch import QueryBatch, TokenBatch, _integer
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ class KVStagingPlan:
     staging_slots: tuple[tuple[int, ...], ...]
 
     def __post_init__(self):
-        if type(self.base) is not KVPageView or type(self.batch) is not TokenBatch:
+        if type(self.base) is not KVPageView or type(self.batch) not in (TokenBatch, QueryBatch):
             raise ValueError('Staging requires an explicit KV view and token batch')
         if self.base.request_ids != self.batch.request_ids:
             raise ValueError('KV and token request ownership/order differ')

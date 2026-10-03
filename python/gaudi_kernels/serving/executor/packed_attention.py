@@ -9,7 +9,7 @@ import math
 
 import torch
 
-from gaudi_kernels.engine.token_batch import TokenBatch
+from gaudi_kernels.engine.token_batch import QueryBatch, TokenBatch
 
 
 @dataclass
@@ -47,7 +47,7 @@ class PackedKVSession:
         self.pending = None
 
     def prepare(self, batch):
-        if type(batch) is not TokenBatch or self.pending is not None:
+        if type(batch) not in (TokenBatch, QueryBatch) or self.pending is not None:
             raise ValueError('Explicit batch required with no pending transaction')
         for request in batch.requests:
             if request.start_position != len(self.committed.get(request.request_id, ())):
