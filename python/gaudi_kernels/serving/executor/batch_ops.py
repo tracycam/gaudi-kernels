@@ -1,9 +1,6 @@
 """Phase-independent token-row MoE. All routing stays on HPU; no data .item()."""
 from gaudi_kernels.engine.context import context as execution_context
-from pathlib import Path
-import os
 import torch
-ROOT = Path(__file__).resolve().parent.parent
 torch.ops.load_library(execution_context().path('batch'))
 if execution_context().has('folded'):
     torch.ops.load_library(execution_context().path('folded', 'torch'))
@@ -21,7 +18,7 @@ def set_gp_policy(policy):
     global _GP_POLICY
     if policy not in _GP_COUNTS:
         raise ValueError('Unknown compact GP policy')
-    if policy == 'vector_fetch' and None != '1':
+    if policy == 'vector_fetch':
         raise ValueError('Vector-fetch GP library was not installed')
     if policy == 'vector_fetch_folded' and (not execution_context().has('folded')):
         raise ValueError('Folded vector-fetch GP library was not installed')
@@ -94,12 +91,11 @@ def moe(x, ids, routing, gp, gs, dp, ds, table, directions, *, mode='broadcast',
             mode = 'broadcast'
         ids = torch.where(route_mask, ids, torch.full_like(ids, -1))
         routing = torch.where(route_mask, routing, torch.zeros_like(routing))
-    precise = '1' == '1'
-    if precise and mode == 'sorted':
+    if mode == 'sorted':
         raise ValueError('FP32 routing is certified for compact/broadcast only')
     x = x.clone()
     ids = ids.to(torch.int32).clone()
-    routing = routing.to(torch.float32 if precise else torch.bfloat16).clone()
+    routing = routing.to(torch.float32).clone()
     if mode == 'compact':
         if _GP_POLICY == 'vector_fetch_scale_tail':
             from gaudi_kernels.serving.executor.moe_dispatch_runtime import scale_tail_row_allowed
@@ -108,7 +104,8 @@ def moe(x, ids, routing, gp, gs, dp, ds, table, directions, *, mode='broadcast',
             from gaudi_kernels.serving.executor.gp_scale_tail_runtime import operator
             gp_call = operator()
         else:
-            gp_call = torch.ops.gaudi_activation_folded.gp if _GP_POLICY == 'vector_fetch_folded' else torch.ops.gaudi_gp_diagnostic.broadcast if _GP_POLICY == 'vector_fetch' else torch.ops.unified_batch.gp
+            gp_call = (torch.ops.gaudi_activation_folded.gp if _GP_POLICY == 'vector_fetch_folded'
+                       else torch.ops.unified_batch.gp)
         _GP_COUNTS[_GP_POLICY] += 1
         gp_out = gp_call(gp, gs, x, table, ids)
         gate = torch.ops.unified_batch.gate(gp_out, ids)
@@ -116,24 +113,14 @@ def moe(x, ids, routing, gp, gs, dp, ds, table, directions, *, mode='broadcast',
         down_call = torch.ops.gaudi_down_activation.broadcast if _DOWN_POLICY == 'vector_fetch' else torch.ops.unified_batch.down
         partial = down_call(dp, ds, gate, table, ids)
     else:
-        if mode not in ('broadcast', 'sorted'):
-            raise ValueError('Expected compact, broadcast or sorted')
-        if mode == 'sorted':
-            (values, permutation) = torch.sort(ids.reshape(-1))
-            sorted_ids = values.reshape(ids.shape).clone()
-            permutation = permutation.to(torch.int32).reshape(ids.shape).clone()
-            (ax, mapping, inverse) = torch.ops.unified_batch.sorted_prep(x, sorted_ids, permutation)
-            selected_ids = sorted_ids
-        else:
-            (ax, mapping) = torch.ops.native_mxfp4.prep(x, ids, 1, 3, ids.shape[1])
-            selected_ids = ids
+        if mode != 'broadcast':
+            raise ValueError('Expected compact or broadcast')
+        (ax, mapping) = torch.ops.native_mxfp4.prep(x, ids, 1, 3, ids.shape[1])
+        selected_ids = ids
         gemv = torch.ops.unified_batch.masked_gemv if route_mask is not None else torch.ops.native_mxfp4.gemv
         gp_out = gemv(gp, gs, ax, table, mapping)
         (gate, down_map) = torch.ops.unified_batch.gate_broadcast(gp_out, selected_ids)
         partial = gemv(dp, ds, gate, table, down_map)
-    if precise:
-        from gaudi_kernels.serving.executor.precision_ops import combine
-        out = combine(partial, routing, directions, 6144, ids.shape[1])
-    else:
-        out = torch.ops.unified_batch.combine(partial, routing, directions, inverse) if mode == 'sorted' else torch.ops.native_mxfp4.combine(partial, routing, directions, 6144, ids.shape[1])
+    from gaudi_kernels.serving.executor.precision_ops import combine
+    out = combine(partial, routing, directions, 6144, ids.shape[1])
     return (out, gp_out, gate, partial) if debug else out

@@ -10,7 +10,6 @@ from gaudi_kernels.engine.context import context
 from gaudi_kernels.moe_expert_plan import ExpertPlan
 
 _LIBRARIES = None
-_CAPTURES = {}
 
 
 def validate_rows(rows):
@@ -61,20 +60,9 @@ def forward(x, ids, routing, gp, gs, down, ds, table, directions):
         return moe(x, ids, routing, gp, gs, down, ds, table, directions, mode='broadcast')
     # Lazy CustomOp inputs must have producers before the recipe is captured.
     # Keep materialization at the entry, never once per expert or bucket.
-    key=str(x.shape[0])
-    _CAPTURES[key]=_CAPTURES.get(key,0)+1
     x = x.contiguous().clone()
     ids = ids.to(torch.int32).contiguous().clone()
     routing = routing.to(torch.float32).contiguous().clone()
     return expert_moe(x, ids, routing, gp, gs, down, ds, table, directions,
                       plan=plan_for(x.shape[0]), tpc=moe, decoder='k8',
                       empty_mode=1, padding_mode=1)
-
-
-def reset_counters():
-    _CAPTURES.clear()
-
-
-def snapshot():
-    return {'libraries':_LIBRARIES,'graph_body_calls_by_rows':dict(_CAPTURES),
-            'scope':'Python graph construction calls; not device execution counts'}

@@ -7,7 +7,8 @@ delivery. The Gaudi plugin provides the worker/model-runner construction point.
 
 `engine/` supplies typed policies, shape selection, immutable artifact bindings,
 and runtime context. `serving/` provides startup, NUMA/device placement, model
-adaptation, and the runner. `serving/executor/` manages capture, named input
+adaptation, and the runner. MiMo-specific expert packing and installation live
+in `serving/models/mimo_mxfp4.py`. `serving/executor/` manages capture, named input
 transfers, request/query ownership, replay, and numerical diagnostics.
 
 The qualified model path captures a real PyTorch/HPU graph execution and records
@@ -42,3 +43,6 @@ carry format, layout, scale, and numerical contracts.
 
 See [STATUS.md](STATUS.md) for tested scope and [PUBLICATION.md](PUBLICATION.md)
 for the distinction between public source and private deployment artifacts.
+
+Repository cleanup and the path from these components to reusable infrastructure
+are tracked in [REUSABLE_INFRASTRUCTURE.md](REUSABLE_INFRASTRUCTURE.md).

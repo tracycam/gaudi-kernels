@@ -76,11 +76,16 @@ One Python/FFI call is not one hardware launch: the integrated replay still
 submits hundreds of SDK operations. Algorithmic bytes/time is not a measurement
 of physical HBM transactions. Kernel speedups are not automatically model speedups.
 
+The [consolidation contract and roadmap](docs/REUSABLE_INFRASTRUCTURE.md) identifies
+which components are reusable, which remain model-specific, and how cleanup is
+checked without sacrificing the measured execution path.
+
 ## Source layout
 
 ```text
 python/gaudi_kernels/engine/    Typed policies and artifact ownership
 python/gaudi_kernels/serving/   Launcher, worker, runner, model adapter
+  models/                     Model-specific weight/layout adapters
   executor/                   Capture, bindings, replay, query state
 csrc/tpc/                     TPC source kernels
 csrc/host/                    Kernel database glue

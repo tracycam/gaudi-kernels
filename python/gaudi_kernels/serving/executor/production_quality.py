@@ -238,12 +238,6 @@ def configure_policy(worker, document):
     if getattr(runner, 'speculative_config', None) is not None and (not callable(draft_clear)):
         raise RuntimeError('No drafter graph cache invalidator')
     clear()
-    for module in runner.model.modules():
-        clear_grouped = getattr(module, 'clear_grouped_cache', None)
-        if callable(clear_grouped):
-            clear_grouped()
-    from .grouped_moe_runtime import reset_counters
-    reset_counters()
     if callable(draft_clear):
         draft_clear()
     set_policy(selected.block_policy)
@@ -326,8 +320,6 @@ def snapshot(worker):
         result['norm_grid24'] = grid24_snapshot()
     from gaudi_kernels.serving.executor.moe_dispatch_runtime import snapshot as moe_dispatch_snapshot
     result['moe_dispatch'] = moe_dispatch_snapshot()
-    from .grouped_moe_runtime import snapshot as grouped_snapshot
-    result['grouped_moe'] = grouped_snapshot()
     from gaudi_kernels.serving.executor.moe_sum_bf16_runtime import snapshot as moe_sum_snapshot
     result['moe_sum_bf16'] = moe_sum_snapshot()
     if execution_context().has('reduce_isa'):
@@ -344,7 +336,7 @@ def snapshot(worker):
     if execution_context().has('qkv_post'):
         from gaudi_kernels.vllm_qkv_postprocess import snapshot_qkv_postprocess
         result['qkv_postprocess'] = snapshot_qkv_postprocess()
-    if None == '1' or execution_context().has('folded'):
+    if execution_context().has('folded'):
         from gaudi_kernels.serving.executor.batch_ops import gp_snapshot
         result['gp'] = gp_snapshot()
     if execution_context().has('down'):

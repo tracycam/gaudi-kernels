@@ -1,7 +1,7 @@
-"""Opt-in model integration; no edits to the shared installed plugin."""
-from gaudi_kernels.engine.context import context as execution_context
-import json, os, sys, time
-from pathlib import Path
+"""MiMo TP8 expert weight/layout adapter; execution dispatch is shared separately."""
+import json
+import os
+import time
 import numpy as np
 import torch
 import habana_frameworks.torch.core as htcore
@@ -17,44 +17,18 @@ class NativeExpertTP(torch.nn.Module):
         (table, directions) = native_ops.constants(self.gp.device)
         self.register_buffer('table', table)
         self.register_buffer('directions', directions)
-        self._grouped_graph = None
 
     def forward(self, x, topk_ids, topk_weights, permuted_weights=True, activation='silu'):
         assert x.ndim == 2 and x.shape[-1] == 6144 and (topk_ids.ndim == 2)
         assert 1 <= topk_ids.shape[-1] <= 384 and topk_weights.shape == topk_ids.shape and (topk_ids.shape[0] == x.shape[0])
         assert activation == 'silu'
-        from .moe_dispatch_runtime import forward
+        from gaudi_kernels.serving.executor.moe_dispatch_runtime import forward
         from gaudi_kernels.serving.diagnostics import boundary_hashes as boundary
         output = forward(x, topk_ids, topk_weights, self.gp, self.gs,
-                         self.dp, self.ds, self.table, self.directions, grouped=self._grouped_forward)
+                         self.dp, self.ds, self.table, self.directions)
         if boundary.active():
             return boundary.emit(self._boundary_layer_index, 'moe_local', output)
         return output
-
-    def _grouped_forward(self, x, ids, routing):
-        # The graph input contract must already match the custom-op contract;
-        # do not let replayV3 bind an int64 router tensor to an int32 view.
-        ids = ids.to(torch.int32).contiguous()
-        routing = routing.to(torch.float32).contiguous()
-        if torch.hpu.is_current_stream_capturing():
-            # An enclosing model graph already removes construction overhead.
-            # Append operators to that graph instead of attempting nested capture.
-            from .grouped_moe_runtime import forward
-            return forward(x, ids, routing, self.gp, self.gs, self.dp, self.ds,
-                           self.table, self.directions)
-        if self._grouped_graph is None:
-            from .grouped_moe import GroupedMoE
-            # Weight owners stay bound to this layer; graph replay only binds
-            # activations/routes. Never copy the expert weights between layers.
-            self._grouped_graph = torch.hpu.wrap_in_hpu_graph(
-                GroupedMoE(self), disable_tensor_cache=True, asynchronous=False,
-                max_graphs=5)
-        return self._grouped_graph(x, ids, routing)
-
-    def clear_grouped_cache(self):
-        if self._grouped_graph is not None:
-            self._grouped_graph.clear_cache()
-
 
 
 def process_weights(self, layer):

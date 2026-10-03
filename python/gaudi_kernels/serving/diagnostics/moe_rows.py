@@ -12,7 +12,7 @@ def on_worker(worker, plan):
     import torch
     import habana_frameworks.torch.core as hc
     from gaudi_kernels.engine.context import context
-    from gaudi_kernels.serving.executor.native_model import NativeExpertTP
+    from gaudi_kernels.serving.models.mimo_mxfp4 import NativeExpertTP
     from gaudi_kernels.serving.executor.batch_ops import moe
     from gaudi_kernels.serving.executor.gp_scale_tail_runtime import operator
     from gaudi_kernels.serving.executor.precision_ops import combine
