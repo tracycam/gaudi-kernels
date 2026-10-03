@@ -41,6 +41,9 @@ class PackedInputBuffers:
 class BoundAttentionMetadata(PackedAttentionMetadata):
     visible_lengths: tuple = ()
     history_capacity: int = 0
+    window_page_ids: torch.Tensor | None = None
+    window_page_groups: torch.Tensor | None = None
+    flat_query_positions: torch.Tensor | None = None
 
 
 class BoundKVSession:
@@ -66,6 +69,10 @@ class BoundKVSession:
         self.lengths = tuple(torch.empty((), device=device, dtype=torch.int64) for _ in lengths)
         self.query_positions = tuple(torch.empty(n, device=device, dtype=torch.int64) for n in lengths)
         self.key_positions = tuple(torch.arange(history_capacity, device=device) for _ in lengths)
+        self.native_swa = getattr(arena, 'native_swa', False)
+        self.window_page_ids = torch.empty(2*sum(lengths), device=device, dtype=torch.int32)
+        self.window_page_groups = torch.empty_like(self.window_page_ids)
+        self.flat_query_positions = torch.empty(sum(lengths), device=device, dtype=torch.int32)
 
     @property
     def caches(self):
@@ -87,6 +94,13 @@ class BoundKVSession:
                 self.query_positions[i].copy_(actual.query_positions[i])
             self.pending = BoundAttentionMetadata(batch, self, actual.candidate_slots, self.mapping,
                 self.slots, self.key_positions, self.query_positions, True, self.lengths, self.history_capacity)
+            if hasattr(actual, 'window_page_ids'):
+                self.window_page_ids.copy_(actual.window_page_ids)
+                self.window_page_groups.copy_(actual.window_page_groups)
+                self.flat_query_positions.copy_(actual.flat_query_positions)
+                self.pending.window_page_ids = self.window_page_ids
+                self.pending.window_page_groups = self.window_page_groups
+                self.pending.flat_query_positions = self.flat_query_positions
             self._actual = actual
             return self.pending
         except BaseException:

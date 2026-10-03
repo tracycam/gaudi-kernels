@@ -9,7 +9,7 @@ import json
 import time
 
 
-def on_worker(worker):
+def on_worker(worker, native_swa=False):
     import torch
     import torch.distributed as dist
     import habana_frameworks.torch.core as htcore
@@ -33,12 +33,15 @@ def on_worker(worker):
     api.e1_set_semantic_role.argtypes = [ctypes.c_char_p]
     holder = ctypes.CDLL(context().path('tensor_hold', 'host'))
     holder.e1_tensor_hold_stats.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_char_p]
-    target = PackedTargetExecutor(runner, kv_capacity=128)
+    capacities = {str(i): 32 for i in range(3)}
+    options = dict(request_capacities=capacities, native_swa=native_swa) if native_swa else dict(kv_capacity=128)
+    target = PackedTargetExecutor(runner, **options)
     target.session = BoundKVSession(target.session, (1, 4, 8), 32)
-    reference = PackedTargetExecutor(runner, kv_capacity=128)
+    reference = PackedTargetExecutor(runner, **options)
     report = {'rank': worker.rank, 'pass': False, 'steps': [], 'source_captures': 1,
               'scope': 'advancing target recorder with exclusive KV; no sampler, complete MTP or TPS',
-              'explicit_graph_producer': False, 'history_capacity_per_request': 32}
+              'explicit_graph_producer': False, 'history_capacity_per_request': 32,
+              'native_swa': native_swa}
 
     def batch_at(step):
         starts = tuple(len(target.session.arena.committed.get(str(i), ())) for i in range(3))

@@ -23,6 +23,8 @@ def main():
                    help='Audit real residual-completed target features at independently hooked decoder boundaries')
     p.add_argument('--trace-layers', type=int, nargs='+', default=(),
                    help='Freeze operator input/output boundaries for serving-teacher diagnosis')
+    p.add_argument('--native-packed-swa', action='store_true',
+                   help='Use request-owned aligned pages and the pinned multi-query SWA kernel')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -43,6 +45,7 @@ def main():
     llm = LLM(**opts)
     llm.collective_rpc('native_configure', args=(False, False, False, 'compact'))
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
+    plan['native_swa'] = args.native_packed_swa
     if args.trace_layers:
         if any(i < 0 or i >= args.layers for i in args.trace_layers) or not args.serving_teacher:
             raise ValueError('Boundary tracing requires valid decoder indices and serving teacher')
@@ -89,7 +92,7 @@ def main():
             if len(result['static_replay']) != 8 or not all(rank['pass'] for rank in result['static_replay']):
                 raise RuntimeError('Packed same-address recorded replay failed')
         if args.advancing_replay:
-            result['advancing_replay'] = llm.collective_rpc('packed_advancing_replay_probe')
+            result['advancing_replay'] = llm.collective_rpc('packed_advancing_replay_probe', args=(args.native_packed_swa,))
             if len(result['advancing_replay']) != 8 or not all(rank['pass'] for rank in result['advancing_replay']):
                 raise RuntimeError('Packed advancing recorded replay failed')
         if args.target_features:

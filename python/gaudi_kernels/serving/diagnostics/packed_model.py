@@ -18,8 +18,10 @@ def on_worker(worker, plan):
         rows = case['rows']
         starts = case['starts']
         capacity = sum(starts) + sum(rows) + 32
-        packed = PackedTargetExecutor(runner, kv_capacity=capacity)
-        sequential = PackedTargetExecutor(runner, kv_capacity=capacity)
+        options = (dict(request_capacities={str(i): starts[i] + rows[i] + 32 for i in range(len(rows))},
+                        native_swa=True) if plan.get('native_swa') else dict(kv_capacity=capacity))
+        packed = PackedTargetExecutor(runner, **options)
+        sequential = PackedTargetExecutor(runner, **options)
         histories = []
         for index, start in enumerate(starts):
             tokens = tuple(case['prefix_tokens'][index]) if 'prefix_tokens' in case else tuple(
@@ -42,8 +44,9 @@ def on_worker(worker, plan):
             trace.begin(batch.num_tokens)
         original_slots = {request.request_id: packed.session.committed.get(request.request_id, ())
                           for request in requests}
-        live_rows = sum(starts)
-        past_storage = {name: tuple(tensor[:live_rows].cpu() for tensor in tensors)
+        live_indices = torch.tensor(tuple(s for slots in original_slots.values() for s in slots),
+                                    device=runner.device, dtype=torch.int64)
+        past_storage = {name: tuple(tensor.index_select(0, live_indices).cpu() for tensor in tensors)
                         for name, tensors in packed.session.caches.items()}
         calls = []
         handles = []
@@ -129,7 +132,7 @@ def on_worker(worker, plan):
         packed.abort(mutated)
         candidate = packed.execute(batch)
         row['live_history_bytes_unchanged'] = all(torch.equal(saved.contiguous().view(torch.uint8),
-            tensor[:live_rows].cpu().contiguous().view(torch.uint8))
+            tensor.index_select(0, live_indices).cpu().contiguous().view(torch.uint8))
             for name, tensors in packed.session.caches.items() for saved, tensor in zip(past_storage[name], tensors))
         # Reject candidate suffixes; retain the independent sequential oracle's
         # original history and only its accepted rows. Rebuilding the whole

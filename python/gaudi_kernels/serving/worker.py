@@ -34,9 +34,9 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.packed_replay import on_worker
         return on_worker(self)
 
-    def packed_advancing_replay_probe(self):
+    def packed_advancing_replay_probe(self, native_swa=False):
         from gaudi_kernels.serving.diagnostics.packed_advance import on_worker
-        return on_worker(self)
+        return on_worker(self, native_swa)
 
     def packed_feature_probe(self, feature_layers):
         from gaudi_kernels.serving.diagnostics.packed_features import on_worker

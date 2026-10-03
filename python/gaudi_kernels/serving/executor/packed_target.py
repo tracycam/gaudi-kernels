@@ -21,7 +21,8 @@ class PackedTargetResult:
 
 
 class PackedTargetExecutor:
-    def __init__(self, runner, *, kv_capacity=None, session=None, feature_layers=()):
+    def __init__(self, runner, *, kv_capacity=None, session=None, feature_layers=(),
+                 request_capacities=None, native_swa=False):
         self.runner = runner
         self.adapter = runner.model
         self.model = self.adapter.model
@@ -48,8 +49,17 @@ class PackedTargetExecutor:
                 geometries[name] = (impl.num_kv_heads, impl.head_size, impl.head_size_v)
             elif impl is not None:
                 raise ValueError('Loaded attention backend has no packed consumer: ' + name)
-        self.session = session if session is not None else PackedKVSession(
-            geometries, kv_capacity, device=runner.device, dtype=runner.vllm_config.model_config.dtype)
+        if request_capacities is not None:
+            if session is not None or kv_capacity is not None:
+                raise ValueError('Page capacities cannot replace an explicit session/arena size')
+            from gaudi_kernels.serving.executor.packed_pages import PagedKVSession
+            self.session = PagedKVSession(geometries, request_capacities, device=runner.device,
+                                          dtype=runner.vllm_config.model_config.dtype, native_swa=native_swa)
+        else:
+            if native_swa:
+                raise ValueError('Native packed SWA requires request-owned physical pages')
+            self.session = session if session is not None else PackedKVSession(
+                geometries, kv_capacity, device=runner.device, dtype=runner.vllm_config.model_config.dtype)
 
     @torch.inference_mode()
     def execute(self, batch):

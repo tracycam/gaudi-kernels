@@ -155,6 +155,20 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
     key_cache = key_cache.index_copy_(0, metadata.slot_mapping, key.to(key_cache.dtype))
     value_cache = value_cache.index_copy_(0, metadata.slot_mapping, value.to(value_cache.dtype))
     session.caches[layer.layer_name] = (key_cache, value_cache)
+    if (getattr(session, 'native_swa', False) and impl.sliding_window == 128 and
+            (impl.num_heads, impl.num_kv_heads, impl.head_size, impl.head_size_v) == (16, 1, 192, 128) and
+            rows <= 32 and query.dtype == key_cache.dtype == value_cache.dtype == torch.bfloat16 and
+            impl.sinks is not None and impl.sinks.dtype == torch.bfloat16 and impl.sinks.numel() == 16 and
+            getattr(metadata, 'window_page_ids', None) is not None):
+        # Existing pinned/qualified per-query FP32 SWA kernel. Physical pages
+        # are request-private and ordered for each row; no whole-cache gather.
+        result = torch.ops.gaudi_swa128_batch.window_quad_fp32(query.reshape(rows, 1, 3072).contiguous(),
+            key_cache, value_cache, metadata.window_page_ids, metadata.window_page_groups,
+            metadata.flat_query_positions, impl.sinks.contiguous(), impl.scale).reshape(rows, -1)
+        if output is not None:
+            output.copy_(result.reshape(output.shape))
+            return output
+        return result
     segments = []
     for index, request in enumerate(metadata.batch.requests):
         begin, end = metadata.batch.query_start_loc[index:index + 2]
