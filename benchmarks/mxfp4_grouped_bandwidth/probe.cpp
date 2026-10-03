@@ -27,7 +27,7 @@ struct Buffer{synTensor t;synSectionHandle section;std::string name;uint64_t byt
 int main(int argc,char**argv){try{
  if(argc!=10)throw std::invalid_argument("probe tpc|mme|mme-a E pool N K rows splits banks random|mixed|cancel");
  std::string mode=argv[1],pattern=argv[9];int E=std::stoi(argv[2]),pool=std::stoi(argv[3]),N=std::stoi(argv[4]),K=std::stoi(argv[5]),M=std::stoi(argv[6]),S=std::stoi(argv[7]),banks=std::stoi(argv[8]);
- if((mode!="tpc"&&mode!="mme"&&mode!="mme-a")||E<8||E>384||pool!=E*banks||pool>384||N<256||N%Tile||K<32||K%32||(M!=1&&M!=2&&M!=4)||S<1||S>K/32||banks<1||banks>16||(pattern!="random"&&pattern!="mixed"&&pattern!="cancel"&&pattern!="phase"&&pattern!="first-phase"&&pattern!="last-phase"))throw std::invalid_argument("unsupported experiment geometry");
+ if((mode!="tpc"&&mode!="mme"&&mode!="mme-a")||E<1||E>384||pool!=E*banks||pool>384||N<256||N%Tile||K<32||K%32||M<1||M>4096||(mode=="tpc"&&M!=1&&M!=2&&M!=4)||S<1||S>K/32||banks<1||banks>16||(pattern!="random"&&pattern!="mixed"&&pattern!="cancel"&&pattern!="phase"&&pattern!="first-phase"&&pattern!="last-phase"))throw std::invalid_argument("unsupported experiment geometry");
  if(Tile==512&&(mode!="tpc"||M!=1))throw std::invalid_argument("N512 prototype is M1 TPC only");
 #ifdef GK_LITERAL_GP
  if(N!=512||K!=6144||S!=3)throw std::invalid_argument("literal GP has N512 K6144 split3");
@@ -35,6 +35,7 @@ int main(int argc,char**argv){try{
  if(pattern=="mixed"&&M!=2)throw std::invalid_argument("mixed means alternating M1/M2");
  uint64_t weight_bytes=uint64_t(pool)*N*K/2,scale_bytes=uint64_t(pool)*N*(K/32),xbytes=uint64_t(E)*M*K*2,ybytes=uint64_t(E)*M*N*4;
  if(weight_bytes+scale_bytes>2ull*1024*1024*1024)throw std::invalid_argument("bounded probe weight limit");
+ if(xbytes+ybytes>512ull*1024*1024)throw std::invalid_argument("bounded activation/output probe limit");
  ck(synInitialize(),"init");synDeviceId dev;ck(synDeviceAcquireByModuleId(&dev,gaudi_experiment_module()),"acquire assigned module");synGraphHandle graph;ck(synGraphCreate(&graph,synDeviceGaudi2),"graph");
  std::vector<Buffer>bs;bs.reserve(8);
  auto tensor=[&](std::string name,synDataType type,std::vector<int>dims,uint64_t bytes){synTensorDescriptor d{};d.m_name=name.c_str();d.m_dataType=type;d.m_dims=dims.size();for(unsigned j=0;j<dims.size();++j)d.m_sizes[j]=d.m_minSizes[j]=dims[j];synSectionHandle sec;ck(synSectionCreate(&sec,0,graph),"section");ck(synSectionSetPersistent(sec,true),"persistent");synTensor t;ck(synTensorCreate(&t,&d,sec,0),"tensor");Buffer b{t,sec,name,bytes,0,nullptr};ck(synHostMalloc(dev,bytes,0,&b.host),"host alloc");ck(synDeviceMalloc(dev,bytes,0,0,&b.address),"device alloc");std::memset(b.host,0,bytes);bs.push_back(b);return t;};

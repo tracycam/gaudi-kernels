@@ -4,6 +4,11 @@ Private experiments for **8–384 distinct active experts** on one TP shard.
 M is the number of activation rows **per expert**. No production policy is
 changed. Results and limitations: [report](../../docs/MXFP4-GROUPED-BANDWIDTH-20260929.md).
 
+The probe now also admits E1..7 and MME M1..4096 for new coverage experiments,
+with a512MiB activation/output bound. Those are admitted input sizes, not
+measured performance or model qualification. TPC M remains1/2/4 with its
+matching compiled specialization. Historical results remain8..384 experts.
+
 - Original MXFP4 bytes + E8M0 scales, BF16 activations, FP32 accumulators/output.
 - The kernel receives device expert IDs; all experts share one task grid.
 - N256 and losslessly interleaved N512 layouts keep exactly 17/32 bytes/weight.

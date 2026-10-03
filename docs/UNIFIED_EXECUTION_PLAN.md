@@ -35,6 +35,10 @@ remain outside plugin patches and outside public experiment payloads.
 
 ## Contracts
 
+C6 now has a concrete [ragged MXFP4 W4A16/W4A8 work plan](MXFP4_DUAL_PATH_PLAN.md).
+The current model MoE still uses route-batched TPC; large-M grouped MME and
+the K32 MXFP8 device backend are explicit remaining implementations.
+
 - `TokenBatch`: valid flattened tokens/positions, cumulative query offsets,
   request ownership, output selection, and separate capacity padding. Ordinary
   [1,4,128] must not become384 input rows by per-request padding.
