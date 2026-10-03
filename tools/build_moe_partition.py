@@ -33,6 +33,8 @@ try:
   h=Path(ht.__file__).parent
   load(name='gaudi_expert_partition',sources=[str(root/'csrc/torch/moe_partition.cpp')],extra_include_paths=[str(h/'include')],extra_cflags=['-O2'],extra_ldflags=[f'-L{h}/lib',f'-Wl,-rpath,{h}/lib','-lhabana_pytorch_plugin'],build_directory=str(out),is_python_module=False,verbose=True)
  report['state']='built_not_device_verified'
+except BaseException as error:
+ report.update(state='failed',error=repr(error));raise
 finally:
  report['files_sha256']={str(p.relative_to(out)):hashlib.sha256(p.read_bytes()).hexdigest() for p in out.rglob('*') if p.is_file() and p.name!='build.json'}
  (out/'build.json').write_text(json.dumps(report,indent=2)+'\n')

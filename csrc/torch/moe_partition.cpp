@@ -41,6 +41,6 @@ TORCH_LIBRARY(gaudi_expert_partition,m){
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::gate","gk_expert_gate",gate_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,1);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::combine","gk_expert_combine",combine_meta,[](const at::Stack&,size_t&n)->std::shared_ptr<void>{n=0;return nullptr;});
 }
-#define IMPL m.impl("prefix",prefix);m.impl("inverse",inverse);m.impl("row_map",row_map);m.impl("gather",gather);m.impl("gate",gate);m.impl("combine",combine);
-TORCH_LIBRARY_IMPL(gaudi_expert_partition,HPU,m){IMPL}
-TORCH_LIBRARY_IMPL(gaudi_expert_partition,Meta,m){IMPL}
+#define GK_EXPERT_PARTITION_IMPL m.impl("prefix",prefix);m.impl("inverse",inverse);m.impl("row_map",row_map);m.impl("gather",gather);m.impl("gate",gate);m.impl("combine",combine);
+TORCH_LIBRARY_IMPL(gaudi_expert_partition,HPU,m){GK_EXPERT_PARTITION_IMPL}
+TORCH_LIBRARY_IMPL(gaudi_expert_partition,Meta,m){GK_EXPERT_PARTITION_IMPL}
