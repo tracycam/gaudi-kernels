@@ -19,6 +19,8 @@ for CUDA Graph, or a claim that every kernel beats the vendor implementation.
 
 See [architecture](docs/ARCHITECTURE.md), [measured status and limitations](docs/STATUS.md),
 [build instructions](docs/BUILDING.md), and [numerical contracts](docs/CONTRACTS.md).
+The next implementation checkpoints and acceptance criteria are in the
+[unified execution plan](docs/UNIFIED_EXECUTION_PLAN.md).
 
 ## Start without a Gaudi device
 
