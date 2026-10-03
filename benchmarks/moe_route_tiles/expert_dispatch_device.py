@@ -11,6 +11,7 @@ p.add_argument('--thresholds',type=int,nargs='+',default=[64])
 p.add_argument('--partition-library',type=Path,required=True)
 p.add_argument('--padding-mode',type=int,choices=(0,1,2))
 p.add_argument('--tpc-schedule',choices=('contiguous','queue'),default='contiguous')
+p.add_argument('--workspace-mib',type=int,default=1024)
 p.add_argument('--max-slots',type=int,default=0)
 p.add_argument('--row-caps',type=int,nargs='*',default=[])
 p.add_argument('--decoder',choices=('historical','k8'),default='historical')
@@ -68,7 +69,7 @@ try:
    elif state not in ('checkpoint','restored'):raise ValueError('unknown input state')
    states[state]=values
   owners={k:v.to('hpu') for k,v in cpu.items()};sync()
-  plans={f'm{n}':ExpertPlan(n,max_slots_per_bucket=a.max_slots,row_caps=tuple(a.row_caps)) for n in a.thresholds};variants=('broadcast',*plans)
+  plans={f'm{n}':ExpertPlan(n,workspace_budget=a.workspace_mib*1024**2,max_slots_per_bucket=a.max_slots,row_caps=tuple(a.row_caps)) for n in a.thresholds};variants=('broadcast',*plans)
   report['plans']={k:{**v.costs(a.tokens,8,384),'buckets':[b.__dict__ for b in v.buckets(a.tokens,8,384)]} for k,v in plans.items()}
   graphs={};outputs={};streams={};debug_graphs={};debug_outputs={}
   def chain(variant,debug=False):
