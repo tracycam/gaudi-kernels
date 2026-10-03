@@ -45,11 +45,15 @@ def main():
                    help='Intrusively snapshot actual MoE route IDs; this run cannot establish service TPS')
     p.add_argument('--cycle-binding-sweep', nargs='+', choices=('legacy', 'static'),
                    help='Pair changing-history preparation with fixed-capacity page bindings in one process')
+    p.add_argument('--profile-dflash-cycle', action='store_true',
+                   help='Attempt direct Synapse rank0 trace on recorded cycle4; profiling is diagnostic only')
     args = p.parse_args()
     if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
         p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
     if args.record_dflash_cycle and (not args.dflash_cycle or args.cycle_steps < 3):
         p.error('Cycle recording requires --dflash-cycle and at least three cycles')
+    if args.profile_dflash_cycle and (not args.record_dflash_cycle or args.cycle_steps < 5):
+        p.error('Cycle profiling requires recording and at least five cycles')
     if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep) and not args.dflash_cycle:
         p.error('Cycle sweeps require --dflash-cycle')
     if args.dflash_cycle:
@@ -144,6 +148,7 @@ def main():
                                   'cycles': args.cycle_steps, 'verify_rows': extent,
                                   'record_cycle': args.record_dflash_cycle, 'routes': args.cycle_routes,
                                   'static_pages': binding_mode == 'static',
+                                  'profile': args.profile_dflash_cycle,
                                   'label': (f'dflash-b{batch}-t{extent}' +
                                             (f'-{binding_mode}' if args.cycle_binding_sweep else '')) if sweep else 'dflash-target-cycle'}
                     ranks = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))

@@ -113,7 +113,8 @@ def on_worker(worker, plan):
                 result = recorder.capture(schedule, metadata, anchors, remaining)
                 execution = {'kind': 'capture', **recorder.record}
             elif recorded and step > 1:
-                result, timing = recorder.replay(schedule, metadata)
+                result, timing = recorder.replay(schedule, metadata,
+                                                 profile=bool(plan.get('profile', False) and step == 4))
                 execution = {'kind': 'recorded-replay', **timing}
             else:
                 result = coordinator.run_prepared(schedule, metadata, anchors, remaining)
