@@ -162,9 +162,13 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
             getattr(metadata, 'window_page_ids', None) is not None):
         # Existing pinned/qualified per-query FP32 SWA kernel. Physical pages
         # are request-private and ordered for each row; no whole-cache gather.
-        result = torch.ops.gaudi_swa128_batch.window_quad_fp32(query.reshape(rows, 1, 3072).contiguous(),
+        # Reuse the qualified graph-owned reshape edge. A Lazy view alone is
+        # not a sufficient storage boundary for the custom-operator bridge.
+        owned_query = torch.ops.gaudi_swa128.reshape(query, [rows, 1, 3072])
+        context = torch.ops.gaudi_swa128_batch.window_quad_fp32(owned_query,
             key_cache, value_cache, metadata.window_page_ids, metadata.window_page_groups,
-            metadata.flat_query_positions, impl.sinks.contiguous(), impl.scale).reshape(rows, -1)
+            metadata.flat_query_positions, impl.sinks.contiguous(), impl.scale)
+        result = torch.ops.gaudi_swa128.reshape(context, [rows, 2048])
         if output is not None:
             output.copy_(result.reshape(output.shape))
             return output
