@@ -14,7 +14,7 @@ class CycleRecorder:
         from gaudi_kernels.engine.context import context
         self.cycle, self.inputs, self.vote = coordinator, inputs, vote
         self.root, self.rank = root, rank
-        self.signature = metadata.batch.request_ids, metadata.batch.query_lengths
+        self.signature = self._signature(metadata.batch)
         self.addresses = self._addresses(metadata)
         self.api = ctypes.CDLL(None)
         self.api.e1_begin.argtypes = [ctypes.c_int]
@@ -25,6 +25,11 @@ class CycleRecorder:
         self.holder = ctypes.CDLL(context().path('tensor_hold', 'host'))
         self.holder.e1_tensor_hold_stats.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_char_p]
         self.captured = None
+
+    @staticmethod
+    def _signature(schedule):
+        return (schedule.request_ids, schedule.query_lengths, schedule.logits_indices,
+                tuple(request.kind for request in schedule.requests))
 
     def _addresses(self, metadata):
         return tuple(t.data_ptr() for t in (self.inputs.ids, self.inputs.positions,
@@ -64,7 +69,7 @@ class CycleRecorder:
         import habana_frameworks.torch.core as htcore
         if (self.captured is None or self.cycle.pending is not None or self.cycle.failed or
                 self.cycle.target.session.pending is not metadata or metadata.batch is not schedule or
-                (schedule.request_ids, schedule.query_lengths) != self.signature or
+                self._signature(schedule) != self.signature or
                 self._addresses(metadata) != self.addresses):
             raise ValueError('Recorded cycle binding/ownership changed')
         htcore.mark_step()
