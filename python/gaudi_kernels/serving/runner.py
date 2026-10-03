@@ -11,9 +11,21 @@ class NativeHPUModelRunner(hpu.HPUModelRunner):
         # prefill/decode and pads queries. No extra packing in timed replay.
         self._scheduled_token_batch = None
         transfers = getattr(self, '_native_transfers', None)
-        if not warmup and transfers is not None and transfers.audit_inputs is not None:
+        observing = (getattr(self, '_scheduled_token_audit', False) or
+                     (transfers is not None and transfers.audit_inputs is not None))
+        if not warmup and observing:
             from gaudi_kernels.serving.executor.scheduled_tokens import from_vllm
             self._scheduled_token_batch = from_vllm(self.input_batch, scheduler_output, self.requests)
+            if getattr(self, '_scheduled_token_audit', False):
+                records = self._scheduled_token_records
+                if len(records) < 512:
+                    batch = self._scheduled_token_batch
+                    records.append({'request_ids': batch.request_ids, 'query_lengths': batch.query_lengths,
+                                    'query_start_loc': batch.query_start_loc, 'valid_rows': batch.num_tokens,
+                                    'query_kinds': tuple(r.kind for r in batch.requests),
+                                    'logits_indices': batch.logits_indices})
+                else:
+                    self._scheduled_token_dropped += 1
         return super()._prepare_inputs(scheduler_output, num_prefills, num_decodes, warmup)
 
     def _create_decode_input_data(self, num_decodes, num_scheduled_tokens, context_lens,

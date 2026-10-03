@@ -13,6 +13,8 @@ def main():
     p.add_argument('--tokens', type=int, default=16)
     p.add_argument('--arrivals',action='store_true',
                    help='Measure actual per-request cumulative engine-client token arrivals')
+    p.add_argument('--scheduled-token-audit', action='store_true',
+                   help='Validate compact source ownership before legacy phase splitting; diagnostic only')
     p.add_argument('--prompts-jsonl',type=Path,
                    help='Pinned local corpus with original prompt_token_ids and their SHA256')
     p.add_argument('--timing-control',type=Path,
@@ -62,6 +64,8 @@ def main():
         tmp.replace(a.out/'result.json')
     save()
     llm = LLM(**opts)
+    if a.scheduled_token_audit:
+        llm.collective_rpc('scheduled_token_audit', args=(True, True))
     params = SamplingParams(temperature=0, max_tokens=a.tokens, ignore_eos=True)
     if a.arrivals:
         from vllm.sampling_params import RequestOutputKind
@@ -127,6 +131,11 @@ def main():
                     raise RuntimeError('Native batch output differs from same-shape bridge')
                 if active and any(not any(s.get('kind')=='batch' for s in r['native_steps']) for r in ranks):
                     raise RuntimeError('No actual batch native replay on every TP rank')
+        if a.scheduled_token_audit:
+            result['scheduled_tokens'] = llm.collective_rpc('scheduled_token_audit', args=(False, False))
+            if any(not rank['records'] or rank['dropped'] for rank in result['scheduled_tokens']):
+                raise RuntimeError('Incomplete all-rank scheduling source coverage')
+            result['timing_scope'] = 'source audit enabled; not a performance qualification'
         result['status'] = 'NATIVE_POLICY_ABBA_COMPLETE' if timing_control is not None else 'EXECUTION_EQUIVALENCE_PASS'
     except BaseException as exc:
         result.update(status='FAILED', error=repr(exc))

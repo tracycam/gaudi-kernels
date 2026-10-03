@@ -24,6 +24,22 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.runner import NativeHPUModelRunner
         return NativeHPUModelRunner
 
+    def scheduled_token_audit(self, enabled=None, clear=False):
+        """Bounded source-level diagnostics; no tensor values or device access."""
+        if enabled is not None and type(enabled) is not bool:
+            raise ValueError('Token audit enabled must be a bool or None')
+        if type(clear) is not bool:
+            raise ValueError('Token audit clear must be a bool')
+        runner = self.model_runner
+        if clear or not hasattr(runner, '_scheduled_token_records'):
+            runner._scheduled_token_records = []
+            runner._scheduled_token_dropped = 0
+        if enabled is not None:
+            runner._scheduled_token_audit = enabled
+        return {'rank': self.rank, 'enabled': getattr(runner, '_scheduled_token_audit', False),
+                'records': list(runner._scheduled_token_records), 'dropped': runner._scheduled_token_dropped,
+                'scope': 'packed scheduling source; legacy model execution is unchanged'}
+
     native_configure = configure
     native_summary = summary
     native_profile = configure_profile
