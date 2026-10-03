@@ -34,6 +34,10 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.packed_replay import on_worker
         return on_worker(self)
 
+    def packed_advancing_replay_probe(self):
+        from gaudi_kernels.serving.diagnostics.packed_advance import on_worker
+        return on_worker(self)
+
     def packed_scheduled_configure(self, enabled):
         from gaudi_kernels.engine.context import context
         runner = self.model_runner

@@ -17,6 +17,8 @@ def main():
                    help='Also run the experimental compact consumer of actual scheduling and allocator KV')
     p.add_argument('--static-replay', action='store_true',
                    help='Probe same-address recorded target replay; not explicit graph construction or throughput')
+    p.add_argument('--advancing-replay', action='store_true',
+                   help='Update recorded token/position/KV bindings across accepted/rejected input prefixes')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -78,6 +80,10 @@ def main():
             result['static_replay'] = llm.collective_rpc('packed_static_replay_probe')
             if len(result['static_replay']) != 8 or not all(rank['pass'] for rank in result['static_replay']):
                 raise RuntimeError('Packed same-address recorded replay failed')
+        if args.advancing_replay:
+            result['advancing_replay'] = llm.collective_rpc('packed_advancing_replay_probe')
+            if len(result['advancing_replay']) != 8 or not all(rank['pass'] for rank in result['advancing_replay']):
+                raise RuntimeError('Packed advancing recorded replay failed')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
         result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})

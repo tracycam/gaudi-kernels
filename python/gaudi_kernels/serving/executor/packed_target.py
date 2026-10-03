@@ -36,14 +36,29 @@ class PackedTargetExecutor:
 
     @torch.inference_mode()
     def execute(self, batch):
+        return self.execute_prepared(batch, self.session.prepare(batch))
+
+    @torch.inference_mode()
+    def execute_prepared(self, batch, metadata, inputs=None):
+        """Consume an owned transaction and optionally persistent input buffers.
+
+        Preparation/input transfer must finish before recording device commands.
+        This boundary is experimental; it does not enable native serving.
+        """
         from vllm.forward_context import set_forward_context
         import habana_frameworks.torch.core as htcore
-        metadata = self.session.prepare(batch)
+        if self.session.pending is not metadata or metadata.batch is not batch:
+            raise ValueError('Prepared target transaction is stale or belongs to another batch')
         try:
             # Deliberately exclude capacity padding before embedding/projections.
             encoded = batch.encoded()
-            ids = torch.tensor(encoded['token_ids'][:batch.num_tokens], dtype=torch.int32, device=self.runner.device)
-            positions = torch.tensor(encoded['positions'][:batch.num_tokens], dtype=torch.int64, device=self.runner.device)
+            if inputs is None:
+                ids = torch.tensor(encoded['token_ids'][:batch.num_tokens], dtype=torch.int32, device=self.runner.device)
+                positions = torch.tensor(encoded['positions'][:batch.num_tokens], dtype=torch.int64, device=self.runner.device)
+                indices = torch.tensor(batch.logits_indices, dtype=torch.int64, device=self.runner.device)
+            else:
+                inputs.validate(batch)
+                ids, positions, indices = inputs.ids, inputs.positions, inputs.logits_indices
             prepare_rope = self.adapter._rotary_prepare_cos_sin
             if prepare_rope is not None:
                 prepare_rope(positions.reshape(1, -1), recompute_cos_sin=self.adapter.recompute_cos_sin)
@@ -59,7 +74,6 @@ class PackedTargetExecutor:
                 hidden = hidden.clone()
                 logits = None
                 if batch.logits_indices:
-                    indices = torch.tensor(batch.logits_indices, dtype=torch.int64, device=self.runner.device)
                     logits = self.model.compute_logits(hidden.index_select(0, indices)).clone()
             htcore.mark_step()
             torch.hpu.synchronize()

@@ -89,7 +89,7 @@ class PackedKVSession:
 
 
 def tiled_attention(query, keys, values, query_positions, key_positions, *, scale,
-                    sliding_window=None, sinks=None, tile_size=256, slot_indices=None):
+                    sliding_window=None, sinks=None, tile_size=256, slot_indices=None, key_valid=None):
     """Online FP32 softmax; workspace O(Hq * R_request * tile_size)."""
     rows, heads, key_dim = query.shape
     kv_heads = keys.shape[1]
@@ -111,11 +111,19 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
         else:
             slots = slot_indices[offset:end]
             key_tile, value_tile = keys.index_select(0, slots), values.index_select(0, slots)
+        if key_valid is not None:
+            valid = key_valid[offset:end]
+            # Even a zero softmax weight times a NaN value yields NaN. Sanitize
+            # invalid padding before either matmul, not just the score mask.
+            key_tile = torch.where(valid[:, None, None], key_tile, torch.zeros_like(key_tile))
+            value_tile = torch.where(valid[:, None, None], value_tile, torch.zeros_like(value_tile))
         k = key_tile.float().permute(1, 2, 0).unsqueeze(1)
         v = value_tile.float().transpose(0, 1).unsqueeze(1)
         scores = torch.matmul(q, k) * scale
         positions = key_positions[offset:end]
         allowed = positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+        if key_valid is not None:
+            allowed &= key_valid[offset:end].unsqueeze(0)
         if sliding_window:
             allowed &= positions.unsqueeze(0) > query_positions.unsqueeze(1) - sliding_window
         scores = scores.masked_fill(~allowed, float('-inf'))
@@ -150,11 +158,27 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
     segments = []
     for index, request in enumerate(metadata.batch.requests):
         begin, end = metadata.batch.query_start_loc[index:index + 2]
-        past_start = max(0, request.start_position - impl.sliding_window + 1) if impl.sliding_window else 0
-        slots = metadata.visible_slots[index][past_start:]
+        key_valid = None
+        if hasattr(metadata, 'history_capacity'):
+            length = metadata.visible_lengths[index]
+            if impl.sliding_window:
+                width = min(metadata.history_capacity, impl.sliding_window + request.query_length - 1)
+                base = (metadata.query_positions[index][0] - impl.sliding_window + 1).clamp(min=0)
+                positions = torch.arange(width, device=query.device) + base
+                indices = positions.clamp(max=metadata.history_capacity - 1)
+                slots = metadata.visible_slots[index].index_select(0, indices)
+            else:
+                positions = metadata.key_positions[index]
+                slots = metadata.visible_slots[index]
+            key_valid = positions < length
+        else:
+            past_start = max(0, request.start_position - impl.sliding_window + 1) if impl.sliding_window else 0
+            positions = metadata.key_positions[index][past_start:]
+            slots = metadata.visible_slots[index][past_start:]
         segments.append(tiled_attention(query[begin:end], key_cache, value_cache,
-            metadata.query_positions[index], metadata.key_positions[index][past_start:],
-            scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks, slot_indices=slots))
+            metadata.query_positions[index], positions,
+            scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks,
+            slot_indices=slots, key_valid=key_valid))
     result = torch.cat(segments)
     if output is not None:
         output.copy_(result.reshape(output.shape))
