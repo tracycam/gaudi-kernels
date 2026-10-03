@@ -135,3 +135,18 @@ relative L2 about9.35e-8 over512 columns on all ranks. No MAC or precision
 change was required. Original evidence and the corrected interpretation are
 both retained. Legal FP32 addition-tree rounding remains accepted; precision
 selection is deferred as instructed.
+
+The complete B3,T4 compact12 ABBA followup (`700c905`) passed four16-cycle
+runs on all ranks. Every integer witness matches every variant and mean
+emitted/request/cycle is3.0. Each captured cycle still has314 SDK submissions.
+Unaligned maximum-rank cycle medians were61.42/59.35/57.52/57.46ms in ABBA
+order. The apparent roughly1.7% difference is smaller than timing drift and
+is not promoted as a speedup. The separately aligned repeat also exposes
+pre/post live-KV audit costs and captures physical engine intervals.
+
+Compact12 is **route-batched GEMV**, not grouped expert-M GEMM. GP tasks are
+`rows*topk*3` K-split tasks; down tasks are `rows*topk*12` output tiles. They
+retain original packed weight storage but can reread the same expert for
+different routes. Removing activation prep/replication does not establish
+unique-expert HBM reuse or zero physical read amplification. Production
+row dispatch stays unchanged until the consumer-chain evidence supports it.

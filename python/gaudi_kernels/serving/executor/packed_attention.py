@@ -99,9 +99,9 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
         raise ValueError('Invalid packed attention geometry')
     groups = heads // kv_heads
     q = query.float().transpose(0, 1).reshape(kv_heads, groups, rows, key_dim)
-    # Fold query heads into M rather than a broadcast batch dimension.
-    # Synapse otherwise realizes the shared K/V operands as DmaBroadcast
-    # nodes. One dense GEMM per KV head shares each tile physically too.
+    # Optional fold removes the broadcast batch axis from GEMM operands.
+    # Actual DMA lowering/traffic and any benefit require device evidence;
+    # the presence of a DmaBroadcast family alone does not identify its input.
     q_matrix = q.reshape(kv_heads, groups*rows, key_dim)
     shape = (kv_heads, groups, rows, 1)
     maximum = (torch.full(shape, float('-inf'), device=query.device) if sinks is None else

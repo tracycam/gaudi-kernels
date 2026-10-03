@@ -67,9 +67,9 @@ def attention(q,k,v,qpos,kpos,valid,sinks,window,*,fold_heads=False):
     qg=q.reshape(b,t,kh,g,d).permute(0,2,3,1,4).float()
     kg=k.permute(0,2,1,3).float()
     vg=v.permute(0,2,1,3).float()
-    # Keep K/V sharing in the actual MME graph: a group-axis broadcast
-    # otherwise produces physical DMA expansions on Gaudi. Dtypes, masks,
-    # sink normalization and FP32 MACs are unchanged.
+    # Optional fold removes group-axis broadcast operands. Compiler tiling,
+    # physical traffic and latency are measured separately; sharing a source
+    # tensor does not by itself prove a bandwidth reduction.
     qm=qg.reshape(b,kh,g*t,d)
     scores=(((qm@kg.transpose(-1,-2))*(d**-.5)).reshape(b,kh,g,t,s)
             if fold_heads else (qg@kg.unsqueeze(2).transpose(-1,-2))*(d**-.5))
