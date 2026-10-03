@@ -9,6 +9,18 @@ from gaudi_kernels.serving.executor.packed_attention import PackedKVSession, for
 
 
 class PackedAttentionTests(unittest.TestCase):
+    def test_scattered_cache_tiles_match_dense_gather_without_whole_history_copy(self):
+        torch.manual_seed(17)
+        query = torch.randn(3, 4, 8)
+        keys, values = torch.randn(512, 2, 8), torch.randn(512, 2, 6)
+        slots = torch.randperm(512)[:301]
+        positions = torch.arange(298, 301)
+        expected = tiled_attention(query, keys[slots], values[slots], positions, torch.arange(301),
+                                   scale=.25, sliding_window=128, tile_size=31)
+        result = tiled_attention(query, keys, values, positions, torch.arange(301),
+                                 scale=.25, sliding_window=128, tile_size=31, slot_indices=slots)
+        self.assertTrue(torch.equal(result, expected))
+
     def test_diff_kv_gqa_sinks_and_swa_match_dense(self):
         torch.manual_seed(7)
         q, k, v = (torch.randn(4, 4, 8), torch.randn(301, 2, 8), torch.randn(301, 2, 6))

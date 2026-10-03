@@ -89,7 +89,7 @@ class PackedKVSession:
 
 
 def tiled_attention(query, keys, values, query_positions, key_positions, *, scale,
-                    sliding_window=None, sinks=None, tile_size=256):
+                    sliding_window=None, sinks=None, tile_size=256, slot_indices=None):
     """Online FP32 softmax; workspace O(Hq * R_request * tile_size)."""
     rows, heads, key_dim = query.shape
     kv_heads = keys.shape[1]
@@ -103,10 +103,16 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
                sinks.float().reshape(kv_heads, groups, 1, 1).expand(shape))
     denominator = torch.zeros(shape, device=query.device) if sinks is None else torch.ones(shape, device=query.device)
     numerator = torch.zeros((*shape[:-1], values.shape[2]), device=query.device)
-    for offset in range(0, keys.shape[0], tile_size):
-        end = min(offset + tile_size, keys.shape[0])
-        k = keys[offset:end].float().permute(1, 2, 0).unsqueeze(1)
-        v = values[offset:end].float().transpose(0, 1).unsqueeze(1)
+    length = keys.shape[0] if slot_indices is None else slot_indices.numel()
+    for offset in range(0, length, tile_size):
+        end = min(offset + tile_size, length)
+        if slot_indices is None:
+            key_tile, value_tile = keys[offset:end], values[offset:end]
+        else:
+            slots = slot_indices[offset:end]
+            key_tile, value_tile = keys.index_select(0, slots), values.index_select(0, slots)
+        k = key_tile.float().permute(1, 2, 0).unsqueeze(1)
+        v = value_tile.float().transpose(0, 1).unsqueeze(1)
         scores = torch.matmul(q, k) * scale
         positions = key_positions[offset:end]
         allowed = positions.unsqueeze(0) <= query_positions.unsqueeze(1)
@@ -146,9 +152,9 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         begin, end = metadata.batch.query_start_loc[index:index + 2]
         past_start = max(0, request.start_position - impl.sliding_window + 1) if impl.sliding_window else 0
         slots = metadata.visible_slots[index][past_start:]
-        segments.append(tiled_attention(query[begin:end], key_cache.index_select(0, slots),
-            value_cache.index_select(0, slots), metadata.query_positions[index], metadata.key_positions[index][past_start:],
-            scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks))
+        segments.append(tiled_attention(query[begin:end], key_cache, value_cache,
+            metadata.query_positions[index], metadata.key_positions[index][past_start:],
+            scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks, slot_indices=slots))
     result = torch.cat(segments)
     if output is not None:
         output.copy_(result.reshape(output.shape))
