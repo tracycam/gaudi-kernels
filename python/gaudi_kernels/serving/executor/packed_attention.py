@@ -149,6 +149,7 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
     if key is None or value is None or query.shape[0] != rows:
         raise ValueError('Packed target requires exactly the valid query rows')
     key_cache, value_cache = session.caches[layer.layer_name]
+    query_owner = query
     query = query.reshape(rows, impl.num_heads, impl.head_size)
     key = key.reshape(rows, impl.num_kv_heads, impl.head_size)
     value = value.reshape(rows, impl.num_kv_heads, impl.head_size_v)
@@ -164,7 +165,7 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         # are request-private and ordered for each row; no whole-cache gather.
         # Reuse the qualified graph-owned reshape edge. A Lazy view alone is
         # not a sufficient storage boundary for the custom-operator bridge.
-        owned_query = torch.ops.gaudi_swa128.reshape(query, [rows, 1, 3072])
+        owned_query = torch.ops.gaudi_swa128.reshape(query_owner, [rows, 1, 3072])
         # The qualified component probe contributes integer graph outputs,
         # rather than using host-uploaded metadata as custom-kernel inputs.
         # Keep that materialization boundary until a direct binding is proven.
@@ -173,6 +174,11 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         positions = metadata.flat_query_positions + 0
         context = torch.ops.gaudi_swa128_batch.window_quad_fp32(owned_query,
             key_cache, value_cache, pages, groups, positions, impl.sinks.contiguous(), impl.scale)
+        if getattr(session, 'debug_swa', False):
+            session.swa_witnesses.append({'layer': layer.layer_name, 'scale': impl.scale,
+                'query': owned_query.clone(), 'key': key_cache.clone(), 'value': value_cache.clone(),
+                'pages': pages.clone(), 'groups': groups.clone(), 'positions': positions.clone(),
+                'sinks': impl.sinks.clone(), 'output': context.clone()})
         result = torch.ops.gaudi_swa128.reshape(context, [rows, 2048])
         if output is not None:
             output.copy_(result.reshape(output.shape))

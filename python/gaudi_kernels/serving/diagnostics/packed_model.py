@@ -59,12 +59,23 @@ def on_worker(worker, plan):
                 handles.append(module.register_forward_pre_hook(hook(name)))
         from gaudi_kernels.production_integration import snapshot as block_snapshot
         before_branches = block_snapshot()['python_apply_branch_counts']
+        if plan.get('swa_witness'):
+            packed.session.debug_swa = True
+            packed.session.swa_witnesses = []
         try:
             candidate = packed.execute(batch)
             actual_hidden = candidate.hidden.detach().cpu().clone()
             actual_logits = candidate.logits.detach().cpu().clone()
             candidate_boundaries = trace.freeze() if trace else None
+            if plan.get('swa_witness'):
+                root = context().startup.run_dir/'packed-swa-witness'
+                root.mkdir(exist_ok=True)
+                frames = [{k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                           for k, v in frame.items()} for frame in packed.session.swa_witnesses]
+                torch.save(frames, root/f"{case['name']}-rank{worker.rank}.pt")
+                packed.session.debug_swa = False
         finally:
+            packed.session.debug_swa = False
             for handle in handles:
                 handle.remove()
         after_branches = block_snapshot()['python_apply_branch_counts']

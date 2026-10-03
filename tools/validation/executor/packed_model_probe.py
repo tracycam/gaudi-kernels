@@ -27,6 +27,8 @@ def main():
                    help='Use request-owned aligned pages and the pinned multi-query SWA kernel')
     p.add_argument('--defer-precision-gate', action='store_true',
                    help='Report floating regression thresholds without blocking finite/KV/causality functional diagnostics')
+    p.add_argument('--swa-witness', action='store_true',
+                   help='Freeze native SWA operands/output for a small diagnostic, never for timing')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -49,6 +51,7 @@ def main():
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
     plan['native_swa'] = args.native_packed_swa
     plan['defer_precision_gate'] = args.defer_precision_gate
+    plan['swa_witness'] = args.swa_witness
     if args.trace_layers:
         if any(i < 0 or i >= args.layers for i in args.trace_layers) or not args.serving_teacher:
             raise ValueError('Boundary tracing requires valid decoder indices and serving teacher')
