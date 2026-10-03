@@ -38,9 +38,9 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.packed_advance import on_worker
         return on_worker(self, native_swa)
 
-    def packed_feature_probe(self, feature_layers):
+    def packed_feature_probe(self, feature_layers, native_swa=False):
         from gaudi_kernels.serving.diagnostics.packed_features import on_worker
-        return on_worker(self, feature_layers)
+        return on_worker(self, feature_layers, native_swa)
 
     def packed_scheduled_configure(self, enabled):
         from gaudi_kernels.engine.context import context

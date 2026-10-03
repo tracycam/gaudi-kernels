@@ -97,7 +97,7 @@ def main():
                 raise RuntimeError('Packed advancing recorded replay failed')
         if args.target_features:
             layers = (0, 1) if args.layers == 2 else (0, 15, 31, 47, 69)
-            result['target_features'] = llm.collective_rpc('packed_feature_probe', args=(layers,))
+            result['target_features'] = llm.collective_rpc('packed_feature_probe', args=(layers, args.native_packed_swa))
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
         result.update({'pass': True, 'status': 'COMPLETE'})

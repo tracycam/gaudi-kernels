@@ -3,7 +3,7 @@
 import json
 
 
-def on_worker(worker, feature_layers):
+def on_worker(worker, feature_layers, native_swa=False):
     import torch
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.engine.token_batch import RequestTokens, TokenBatch
@@ -12,8 +12,10 @@ def on_worker(worker, feature_layers):
     if runner.input_batch.num_reqs or context().native.active:
         raise ValueError('Feature audit requires an idle scheduler and no native serving plan')
     layers = tuple(feature_layers)
-    target = PackedTargetExecutor(runner, kv_capacity=32, feature_layers=layers)
-    baseline = PackedTargetExecutor(runner, kv_capacity=32)
+    options = (dict(request_capacities={'a': 32, 'b': 32, 'c': 32}, native_swa=True)
+               if native_swa else dict(kv_capacity=32))
+    target = PackedTargetExecutor(runner, feature_layers=layers, **options)
+    baseline = PackedTargetExecutor(runner, **options)
     batch = TokenBatch((RequestTokens('a', (101,), 0, 'decode'),
                         RequestTokens('b', (102, 103, 104, 105), 0, 'verify'),
                         RequestTokens('c', tuple(range(111, 119)), 0, 'prefill', tuple(range(8)))))
@@ -41,7 +43,7 @@ def on_worker(worker, feature_layers):
         for handle in handles:
             handle.remove()
     expected = baseline.execute(batch)
-    report = {'rank': worker.rank, 'valid_rows': batch.num_tokens, 'feature_layers': layers,
+    report = {'rank': worker.rank, 'valid_rows': batch.num_tokens, 'feature_layers': layers, 'native_swa': native_swa,
               'scope': 'actual target pre-final-norm feature boundaries; no drafter or acceptance/TPS',
               'features': [{'layer': i, 'shape': list(t.shape), 'dtype': str(t.dtype),
                             'finite': bool(torch.isfinite(t).all()), 'boundary_bitwise': torch.equal(t, ref)}
