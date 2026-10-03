@@ -1,5 +1,9 @@
 # First unified token protocol checkpoint
 
+Historical first checkpoint. The subsequent actual model/scheduler consumption,
+advancing replay results and remaining70-layer failure are recorded in
+[the packed target checkpoint](PACKED_TARGET_CHECKPOINT.md).
+
 Branch: `feat/unified-token-protocol`. The implementation sequence and final
 service acceptance criteria remain in [the plan](UNIFIED_EXECUTION_PLAN.md).
 No new model throughput or native T>1 admission is claimed by this checkpoint.

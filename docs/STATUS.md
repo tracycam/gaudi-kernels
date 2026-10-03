@@ -1,4 +1,4 @@
-# Measured development status — 2026-10-02
+# Measured development status — 2026-10-03
 
 These observations came from the local development system: a 70-layer MiMo
 model, Gaudi2 TP8, and separately qualified runtime artifacts. Raw private
@@ -16,6 +16,12 @@ benchmark or a general model-quality certification.
 | Multirow arithmetic vs prior policy | Maximum teacher-forced KL about 0.00422 (B2) and 0.00789 (B3); this comparison is not bitwise equality |
 | Native automatic startup | Two-layer TP8 check, 12 native steps per rank before benchmark enable RPC |
 | Full native MTP/DFlash cycle | Not complete; no qualified 170 tokens/s result |
+
+Subsequent [packed target work](PACKED_TARGET_CHECKPOINT.md) has passed two-layer
+actual mixed scheduling, three advancing target replays from one capture, and
+independent decoder-feature checks. These are functional diagnostics, not new
+serving performance. A70-layer real-text rejected-prefix continuation comparison
+still fails (maximum KL0.01359), so native speculative admission remains closed.
 
 The multi-request generation test used a private 4K code-review corpus, greedy
 sampling, and a 96-token output budget. The common decode window begins after
