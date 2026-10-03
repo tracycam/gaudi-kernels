@@ -61,20 +61,27 @@ def rope(x, positions, rotary, theta):
     return torch.cat((rotated.to(x.dtype),x[...,rotary:]),-1)
 
 
-def attention(q,k,v,qpos,kpos,valid,sinks,window):
+def attention(q,k,v,qpos,kpos,valid,sinks,window,*,fold_heads=True):
     # GQA shares K/V across groups without physically repeating the cache.
     b,t,h,d=q.shape;s=k.shape[1];kh=k.shape[2];g=h//kh
     qg=q.reshape(b,t,kh,g,d).permute(0,2,3,1,4).float()
-    kg=k.permute(0,2,1,3).unsqueeze(2).float()
-    vg=v.permute(0,2,1,3).unsqueeze(2).float()
-    scores=(qg@kg.transpose(-1,-2))*(d**-.5)
+    kg=k.permute(0,2,1,3).float()
+    vg=v.permute(0,2,1,3).float()
+    # Keep K/V sharing in the actual MME graph: a group-axis broadcast
+    # otherwise produces physical DMA expansions on Gaudi. Dtypes, masks,
+    # sink normalization and FP32 MACs are unchanged.
+    qm=qg.reshape(b,kh,g*t,d)
+    scores=(((qm@kg.transpose(-1,-2))*(d**-.5)).reshape(b,kh,g,t,s)
+            if fold_heads else (qg@kg.unsqueeze(2).transpose(-1,-2))*(d**-.5))
     mask=valid[:,None,:]&((qpos[:,:,None]-kpos[:,None,:]).abs()<window)
     scores=scores.masked_fill(~mask[:,None,None,:,:],float('-inf'))
     sink=sinks.float().reshape(1,kh,g,1,1).expand(b,kh,g,t,1)
     # The sink contributes to the denominator but has zero V. Including it
     # keeps an all-masked KV row finite without deleting the sink semantics.
     probs=torch.cat((scores,sink),-1).softmax(-1)[...,:s]
-    return (probs@vg).permute(0,3,1,2,4).reshape(b,t,h*d).to(q.dtype)
+    out=((probs.reshape(b,kh,g*t,s)@vg).reshape(b,kh,g,t,d)
+         if fold_heads else probs@vg.unsqueeze(2))
+    return out.permute(0,3,1,2,4).reshape(b,t,h*d).to(q.dtype)
 
 
 def partition(key,shape,rank,size):
@@ -144,7 +151,7 @@ class Draft(nn.Module):
             q=rope(rms(q,self.w(a+'q_norm.weight'),s.eps),positions,s.rotary,s.theta)
             k,v=self.kv(i,z,positions);ck,cv=context[i]
             out=attention(q,torch.cat((ck,k),1),torch.cat((cv,v),1),positions,kpos,valid,
-                          self.w(a+'attention_sink_bias'),s.window)
+                          self.w(a+'attention_sink_bias'),s.window,fold_heads=getattr(self, 'fold_gqa', True))
             x=x+self.linear(a+'o_proj.weight',out)
             z=rms(x,self.w(p+'post_attention_layernorm.weight'),s.eps)
             gate=self.linear(p+'mlp.gate_proj.weight',z);up=self.linear(p+'mlp.up_proj.weight',z)

@@ -89,7 +89,8 @@ class PackedKVSession:
 
 
 def tiled_attention(query, keys, values, query_positions, key_positions, *, scale,
-                    sliding_window=None, sinks=None, tile_size=256, slot_indices=None, key_valid=None):
+                    sliding_window=None, sinks=None, tile_size=256, slot_indices=None, key_valid=None,
+                    fold_heads=True):
     """Online FP32 softmax; workspace O(Hq * R_request * tile_size)."""
     rows, heads, key_dim = query.shape
     kv_heads = keys.shape[1]
@@ -98,6 +99,10 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
         raise ValueError('Invalid packed attention geometry')
     groups = heads // kv_heads
     q = query.float().transpose(0, 1).reshape(kv_heads, groups, rows, key_dim)
+    # Fold query heads into M rather than a broadcast batch dimension.
+    # Synapse otherwise realizes the shared K/V operands as DmaBroadcast
+    # nodes. One dense GEMM per KV head shares each tile physically too.
+    q_matrix = q.reshape(kv_heads, groups*rows, key_dim)
     shape = (kv_heads, groups, rows, 1)
     maximum = (torch.full(shape, float('-inf'), device=query.device) if sinks is None else
                sinks.float().reshape(kv_heads, groups, 1, 1).expand(shape))
@@ -117,9 +122,10 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
             # invalid padding before either matmul, not just the score mask.
             key_tile = torch.where(valid[:, None, None], key_tile, torch.zeros_like(key_tile))
             value_tile = torch.where(valid[:, None, None], value_tile, torch.zeros_like(value_tile))
-        k = key_tile.float().permute(1, 2, 0).unsqueeze(1)
-        v = value_tile.float().transpose(0, 1).unsqueeze(1)
-        scores = torch.matmul(q, k) * scale
+        k = key_tile.float().permute(1, 2, 0)
+        v = value_tile.float().transpose(0, 1)
+        scores = ((torch.matmul(q_matrix, k) * scale).reshape(kv_heads, groups, rows, end-offset)
+                  if fold_heads else torch.matmul(q, k.unsqueeze(1))*scale)
         positions = key_positions[offset:end]
         allowed = positions.unsqueeze(0) <= query_positions.unsqueeze(1)
         if key_valid is not None:
@@ -132,7 +138,9 @@ def tiled_attention(query, keys, values, query_positions, key_positions, *, scal
         safe_maximum = torch.where(torch.isfinite(next_maximum), next_maximum, torch.zeros_like(next_maximum))
         rescale = torch.exp(maximum - safe_maximum)
         probabilities = torch.exp(scores - safe_maximum)
-        numerator = numerator * rescale + torch.matmul(probabilities, v)
+        weighted = (torch.matmul(probabilities.reshape(kv_heads, groups*rows, end-offset), v).reshape_as(numerator)
+                    if fold_heads else torch.matmul(probabilities, v.unsqueeze(1)))
+        numerator = numerator * rescale + weighted
         denominator = denominator * rescale + probabilities.sum(-1, keepdim=True)
         maximum = next_maximum
     result = numerator / torch.where(denominator > 0, denominator, torch.ones_like(denominator))
@@ -207,7 +215,7 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         segments.append(tiled_attention(query[begin:end], key_cache, value_cache,
             metadata.query_positions[index], positions,
             scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks,
-            slot_indices=slots, key_valid=key_valid))
+            slot_indices=slots, key_valid=key_valid, fold_heads=getattr(session, 'fold_gqa', True)))
     result = torch.cat(segments)
     if output is not None:
         output.copy_(result.reshape(output.shape))

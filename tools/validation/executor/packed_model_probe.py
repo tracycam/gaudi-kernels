@@ -47,6 +47,8 @@ def main():
                    help='Pair changing-history preparation with fixed-capacity page bindings in one process')
     p.add_argument('--profile-dflash-cycle', action='store_true',
                    help='Attempt direct Synapse rank0 trace on recorded cycle4; profiling is diagnostic only')
+    p.add_argument('--cycle-gqa-sweep', nargs='+', choices=('broadcast', 'folded'),
+                   help='Compare shared-KV batch broadcasting with query heads folded into M')
     args = p.parse_args()
     if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
         p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
@@ -54,7 +56,7 @@ def main():
         p.error('Cycle recording requires --dflash-cycle and at least three cycles')
     if args.profile_dflash_cycle and (not args.record_dflash_cycle or args.cycle_steps < 5):
         p.error('Cycle profiling requires recording and at least five cycles')
-    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep) and not args.dflash_cycle:
+    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep) and not args.dflash_cycle:
         p.error('Cycle sweeps require --dflash-cycle')
     if args.dflash_cycle:
         prompts = json.loads(args.cycle_prompts.read_text())
@@ -138,23 +140,27 @@ def main():
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
         if args.dflash_cycle:
-            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep
+            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep
             result['dflash_sweep'] = []
             for batch in args.cycle_batch_sweep or (len(prompts),):
-                for extent, binding_mode in ((n, mode) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
-                                             for mode in args.cycle_binding_sweep or ('static',)):
+                for extent, binding_mode, gqa in ((n, mode, g) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
+                                                  for mode in args.cycle_binding_sweep or ('static',)
+                                                  for g in args.cycle_gqa_sweep or ('folded',)):
                     cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts[:batch]],
                                   'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
                                   'cycles': args.cycle_steps, 'verify_rows': extent,
                                   'record_cycle': args.record_dflash_cycle, 'routes': args.cycle_routes,
                                   'static_pages': binding_mode == 'static',
                                   'profile': args.profile_dflash_cycle,
+                                  'fold_gqa': gqa == 'folded',
                                   'label': (f'dflash-b{batch}-t{extent}' +
-                                            (f'-{binding_mode}' if args.cycle_binding_sweep else '')) if sweep else 'dflash-target-cycle'}
+                                            (f'-{binding_mode}' if args.cycle_binding_sweep else '')+
+                                            (f'-gqa-{gqa}' if args.cycle_gqa_sweep else '')) if sweep else 'dflash-target-cycle'}
                     ranks = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
                     emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in ranks]
                     equal = len(ranks) == 8 and all(values == emitted[0] for values in emitted)
-                    entry = dict(batch=batch, verify_rows=extent, binding_mode=binding_mode, ranks=ranks, replicas_equal=equal)
+                    entry = dict(batch=batch, verify_rows=extent, binding_mode=binding_mode, gqa_mode=gqa,
+                                 ranks=ranks, replicas_equal=equal)
                     routes_equal = True
                     if args.cycle_routes:
                         routes = [[c['route_distribution'] for c in rank['cycles']] for rank in ranks]

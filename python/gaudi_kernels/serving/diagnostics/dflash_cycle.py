@@ -47,11 +47,13 @@ def on_worker(worker, plan):
         return torch.cat(outputs, -1)
     draft = load_checkpoint(plan['draft_checkpoint'], runner.device, tp_rank=worker.rank,
                             tp_size=group.world_size, reduce_sum=reduce_sum, gather_output=gather_output)
+    draft.fold_gqa = plan.get('fold_gqa', True)
     ids = tuple(str(i) for i in range(rows))
     capacities = {rid: len(prompt)+cycles*extent+extent for rid, prompt in zip(ids, prompts)}
     target = PackedTargetExecutor(runner, request_capacities=capacities,
                                  native_swa=plan['native_swa'], feature_layers=draft.spec.target_layers)
     coordinator = DFlashCycle(target, draft, ids)
+    target.session.fold_gqa = draft.fold_gqa
     anchors = torch.empty(rows, device=runner.device, dtype=torch.int32)
     for offset in range(0, max(map(len, prompts)), 256):
         requests = []
@@ -75,6 +77,7 @@ def on_worker(worker, plan):
     arena = target.session
     target.session = BoundKVSession(arena, (extent,)*rows, max(capacities.values()),
                                     static_pages=plan.get('static_pages', True))
+    target.session.fold_gqa = draft.fold_gqa
     label = plan.get('label', 'dflash-target-cycle')
     if type(label) is not str or not label or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in label):
         raise ValueError('Cycle evidence label must be a simple local directory name')
@@ -84,6 +87,7 @@ def on_worker(worker, plan):
               'drafter_layers': draft.spec.layers, 'drafter_block': draft.spec.block, 'verify_rows': extent,
               'proposal_hidden_positions': list(range(1, extent)),
               'static_page_bindings': target.session.static_pages,
+              'fold_gqa_heads': draft.fold_gqa,
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     recorded = bool(plan.get('record_cycle', False))
