@@ -49,6 +49,12 @@ nonlinear/combination boundaries. Native Gaudi FP8 encoding adaptation is a
 separate stage: neither raw OCP byte compatibility nor lossless halving at
 subnormal boundaries may be assumed. No two-component FP8 detour is planned.
 
+GP activation quantization is shared: quantize each original token row once,
+then route/gather the codes and scales to its experts. Do not quantize the same
+input eight times. Down quantization follows each expert's nonlinear output and
+cannot in general be shared between different experts. Routing weights remain
+FP32 at the weighted combine boundary.
+
 For each row m, output n and K32 block g:
 
     Y[m,n] = sum_g (sA[m,g] * sW[n,g] * dot(qA[m,g], qW[n,g]))
@@ -147,3 +153,16 @@ codes/scales on five shapes through M1024 (reference SHA256
 122 CPU tests pass. FP8 MME scale streaming and runtime expert-M dispatch are
 still pending. Local source/binary/graph/output evidence is retained in
 `mxfp4-dual-path-20261003`; no production default has changed.
+
+A subsequent same-input GP E8/M32 ABBA compared compiler slicing (A) with the
+existing two-slot manual scheduling request (B), without changing decoder ELF:
+A1/A2=35.513/35.531us; B1/B2=31.392/31.381us. Mean arm medians improve
+35.522→31.387us, a11.64% projection latency reduction in this sequence. All
+four output-bank hashes match in all arms. These are separate-process probes,
+not a resident-model ABBA or a universal scheduling policy.
+
+Both graphs have four decoder/four MME nodes and SRAM-only expanded weights.
+The actual decoded address union rises24→36MiB: the compiler uses three
+weight buffers despite the requested two slots. Hence this result trades SRAM
+capacity for lower observed latency; it does not prove physical overlap without
+an engine trace and must be retested within GP/gate/down/combine lifetimes.
