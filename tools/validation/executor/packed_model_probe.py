@@ -19,6 +19,8 @@ def main():
                    help='Probe same-address recorded target replay; not explicit graph construction or throughput')
     p.add_argument('--advancing-replay', action='store_true',
                    help='Update recorded token/position/KV bindings across accepted/rejected input prefixes')
+    p.add_argument('--target-features', action='store_true',
+                   help='Audit real residual-completed target features at independently hooked decoder boundaries')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -84,6 +86,11 @@ def main():
             result['advancing_replay'] = llm.collective_rpc('packed_advancing_replay_probe')
             if len(result['advancing_replay']) != 8 or not all(rank['pass'] for rank in result['advancing_replay']):
                 raise RuntimeError('Packed advancing recorded replay failed')
+        if args.target_features:
+            layers = (0, 1) if args.layers == 2 else (0, 15, 31, 47, 69)
+            result['target_features'] = llm.collective_rpc('packed_feature_probe', args=(layers,))
+            if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
+                raise RuntimeError('Target auxiliary feature boundary audit failed')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
         result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})
