@@ -4,7 +4,7 @@ from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);p.add_argument('--torch',action='store_true');a=p.parse_args()
 root=Path(__file__).resolve().parents[1];out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 sources={'prefix':'moe_partition/prefix.c','inverse':'moe_partition/inverse.c',
- 'row_map':'moe_route_metadata_v3/row_map.c','gather':'moe_route_tiles/gather.c',
+ 'row_map':'moe_partition/row_map.c','gather':'moe_route_tiles/gather.c',
  'gate':'moe_route_tiles/gate.c','combine':'moe_partition/combine.c','decode':'moe_partition/decode.c','queue':'moe_partition/queue.c','queue_gemv':'moe_partition/masked_gemv_template.c'}
 identity=root/'source-identity.json'
 commit=json.loads(identity.read_text())['git_commit'] if identity.exists() and not (root/'.git').exists() else subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()

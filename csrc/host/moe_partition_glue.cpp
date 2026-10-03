@@ -31,7 +31,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKerne
  }else if(id==1){unsigned r=x[0].geometry.maxSizes[0],t=x[0].geometry.maxSizes[1],e=x[2].geometry.maxSizes[0]-1,c=p[0],b=p[1];
   good=t<=513&&r<=8&&e>=r&&e<=384&&c>=1&&c<=t&&b>=1&&b<=e&&shape(x[0],DATA_I32,{r,t})&&shape(x[1],DATA_I32,{r*t})&&shape(x[2],DATA_I32,{e+1})&&shape(x[3],DATA_I32,{1})&&shape(x[4],DATA_I32,{(r*t+63)/64+1,e})&&shape(y[0],DATA_I32,{r*t});tasks=r*t;
  }else if(id==2){unsigned length=x[0].geometry.maxSizes[0],b=x[1].geometry.maxSizes[0],c=p[0];
-  good=length<=513*8&&b<=384&&c>=1&&c<=513&&shape(x[0],DATA_I32,{length})&&shape(x[1],DATA_I32,{b})&&shape(x[2],DATA_I32,{1})&&shape(y[0],DATA_I32,{b*c});tasks=std::max(length,b);
+  good=length<=513*8&&b<=384&&c>=1&&c<=513&&shape(x[0],DATA_I32,{length})&&shape(x[1],DATA_I32,{b})&&shape(x[2],DATA_I32,{1})&&shape(y[0],DATA_I32,{b*c});tasks=std::max(length,b*c);
  }else if(id==3){unsigned t=x[0].geometry.maxSizes[1],length=x[1].geometry.maxSizes[0],c=y[0].geometry.maxSizes[1],b=y[0].geometry.maxSizes[2];
   good=t<=513&&p[0]>=1&&p[0]<=8&&p[1]>=1&&p[1]<=int(t)&&p[2]>=0&&c==unsigned(p[1])&&length%c==0&&uint64_t(p[2])+b<=length/c&&shape(x[0],DATA_BF16,{6144,t})&&shape(x[1],DATA_I32,{length})&&shape(x[2],DATA_I32,{1})&&shape(y[0],DATA_BF16,{6144,c,b});
  }else if(id==4){unsigned c=y[0].geometry.maxSizes[1],b=y[0].geometry.maxSizes[2],slots=x[1].geometry.maxSizes[0];
