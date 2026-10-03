@@ -23,7 +23,8 @@ parser.add_argument('--benchmark-module', default='tools.validation.executor.nat
                     choices=('tools.validation.executor.native_service_test',
                              'tools.validation.executor.migration_latency_repeat',
                              'tools.validation.executor.packed_model_probe',
-                             'tools.validation.executor.native_batch_test'))
+                             'tools.validation.executor.native_batch_test',
+                             'tools.validation.executor.prefill_dispatch_probe'))
 args,extra=parser.parse_known_args();root=args.output_root.resolve();root.mkdir(parents=True,exist_ok=True)
 assert '/' not in args.case and not (root/args.case).exists()
 lock_root=Path.home()/'gaudi-llm-experiments/.codex-kernel-locks'

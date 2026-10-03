@@ -85,6 +85,21 @@ class NativeHPUWorker(HPUWorker):
                 'records': list(runner._scheduled_token_records), 'dropped': runner._scheduled_token_dropped,
                 'scope': 'packed scheduling source; legacy model execution is unchanged'}
 
+    def device_memory_snapshot(self, reset_peak=False):
+        """Out-of-band allocator telemetry; never called inside inference."""
+        import torch
+        import habana_frameworks.torch.core as hc
+        if type(reset_peak) is not bool:
+            raise ValueError('reset_peak must be bool')
+        hc.mark_step(); torch.hpu.synchronize()
+        if reset_peak:
+            torch.hpu.reset_peak_memory_stats()
+        return {'rank':self.rank,'allocated':torch.hpu.memory_allocated(),
+                'reserved':torch.hpu.memory_reserved(),
+                'max_allocated':torch.hpu.max_memory_allocated(),
+                'max_reserved':torch.hpu.max_memory_reserved(),
+                'scope':'Torch allocator; excludes driver/firmware allocations'}
+
     native_configure = configure
     native_summary = summary
     native_profile = configure_profile

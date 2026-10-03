@@ -42,6 +42,12 @@ def launch(*, manifest, plugin_source, vllm_source, module, arguments=(), python
     if output_argument:
         command.extend(('--out', str(runtime.startup.run_dir)))
     command.extend(arguments)
+    if module == 'vllm.entrypoints.cli.main':
+        if any(arg == '--max-num-batched-tokens' or arg.startswith('--max-num-batched-tokens=') or
+               arg == '--no-enable-chunked-prefill' for arg in arguments):
+            raise ValueError('Set prefill chunk size in the typed runtime configuration')
+        command.extend(['--max-num-batched-tokens',
+                        str(runtime.selection.engine.runtime.prefill_chunk_tokens), '--enable-chunked-prefill'])
     if runtime.selection.engine.runtime.runner == 'native' and module == 'vllm.entrypoints.cli.main':
         command.extend(['--worker-cls', 'gaudi_kernels.serving.worker.NativeHPUWorker'])
     if runtime.selection.engine.runtime.native_enabled and module == 'vllm.entrypoints.cli.main':

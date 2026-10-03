@@ -66,7 +66,8 @@ def prepare(runtime):
 def vllm_kwargs():
     from gaudi_kernels.engine.context import context
     runtime = context()
-    kwargs = {}
+    kwargs = {'max_num_batched_tokens':runtime.selection.engine.runtime.prefill_chunk_tokens,
+              'enable_chunked_prefill':True}
     if runtime.selection.engine.runtime.runner == 'native':
         kwargs['worker_cls'] = 'gaudi_kernels.serving.worker.NativeHPUWorker'
     if runtime.selection.engine.runtime.native_enabled:

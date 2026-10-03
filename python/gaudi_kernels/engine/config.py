@@ -118,6 +118,7 @@ class Runtime:
     runner: Literal['legacy_hooks', 'native'] = 'legacy_hooks'
     native_enabled: bool = False
     batch_replay: bool = False
+    prefill_chunk_tokens: Literal[512, 2048, 4096] = 512
     flights: int = 1
     # SDK graph flush interval, NOT the number of model layers.
     graph_layer_interval: Literal[70] = 70
