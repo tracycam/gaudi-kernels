@@ -90,7 +90,7 @@ class PackedKVSession:
 
 def tiled_attention(query, keys, values, query_positions, key_positions, *, scale,
                     sliding_window=None, sinks=None, tile_size=256, slot_indices=None, key_valid=None,
-                    fold_heads=True):
+                    fold_heads=False):
     """Online FP32 softmax; workspace O(Hq * R_request * tile_size)."""
     rows, heads, key_dim = query.shape
     kv_heads = keys.shape[1]
@@ -215,7 +215,7 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         segments.append(tiled_attention(query[begin:end], key_cache, value_cache,
             metadata.query_positions[index], positions,
             scale=impl.scale, sliding_window=impl.sliding_window, sinks=impl.sinks,
-            slot_indices=slots, key_valid=key_valid, fold_heads=getattr(session, 'fold_gqa', True)))
+            slot_indices=slots, key_valid=key_valid, fold_heads=getattr(session, 'fold_gqa', False)))
     result = torch.cat(segments)
     if output is not None:
         output.copy_(result.reshape(output.shape))

@@ -61,7 +61,7 @@ def rope(x, positions, rotary, theta):
     return torch.cat((rotated.to(x.dtype),x[...,rotary:]),-1)
 
 
-def attention(q,k,v,qpos,kpos,valid,sinks,window,*,fold_heads=True):
+def attention(q,k,v,qpos,kpos,valid,sinks,window,*,fold_heads=False):
     # GQA shares K/V across groups without physically repeating the cache.
     b,t,h,d=q.shape;s=k.shape[1];kh=k.shape[2];g=h//kh
     qg=q.reshape(b,t,kh,g,d).permute(0,2,3,1,4).float()
@@ -151,7 +151,7 @@ class Draft(nn.Module):
             q=rope(rms(q,self.w(a+'q_norm.weight'),s.eps),positions,s.rotary,s.theta)
             k,v=self.kv(i,z,positions);ck,cv=context[i]
             out=attention(q,torch.cat((ck,k),1),torch.cat((cv,v),1),positions,kpos,valid,
-                          self.w(a+'attention_sink_bias'),s.window,fold_heads=getattr(self, 'fold_gqa', True))
+                          self.w(a+'attention_sink_bias'),s.window,fold_heads=getattr(self, 'fold_gqa', False))
             x=x+self.linear(a+'o_proj.weight',out)
             z=rms(x,self.w(p+'post_attention_layernorm.weight'),s.eps)
             gate=self.linear(p+'mlp.gate_proj.weight',z);up=self.linear(p+'mlp.up_proj.weight',z)

@@ -49,6 +49,7 @@ def analyze(path, replays):
     if set(processes.values()) != set(ENGINES):
         raise ValueError('Missing physical engine metadata')
     intervals = {engine: [] for engine in ENGINES}
+    operations = {}
     pending = {}
     for event in events(path):
         if event.get('pid') not in processes or event.get('ph') not in ('B', 'E'):
@@ -60,16 +61,18 @@ def analyze(path, replays):
             # DMA descriptors from the same node can overlap while reusing
             # contextId. Queue-order completion pairs these repeated spans;
             # their physical union is counted once, never as descriptor sums.
-            pending.setdefault(key, deque()).append(event['ts'])
+            operation = event.get('args', {}).get('op') or event.get('name', '').split(' apiId=')[0]
+            pending.setdefault(key, deque()).append((event['ts'], operation))
         else:
             if key not in pending:
                 raise ValueError('End without begin event')
-            begin = pending[key].popleft()
+            begin, operation = pending[key].popleft()
             if not pending[key]:
                 del pending[key]
             if event['ts'] < begin:
                 raise ValueError('Negative engine interval')
             intervals[processes[event['pid']]].append((begin, event['ts']))
+            operations.setdefault((processes[event['pid']], operation), []).append((begin, event['ts']))
     if pending:
         raise ValueError('Unclosed physical engine events')
     all_intervals = [interval for values in intervals.values() for interval in values]
@@ -92,6 +95,9 @@ def analyze(path, replays):
     return {'source': str(path), 'captured_replays': replays,
             'engines_without_execution_events': [engine for engine, values in intervals.items() if not values],
             'missing_execution_warning': 'Metadata without execution events does not establish zero engine activity. Idle values refer only to observed engines.',
+            'operator_family_unions': [dict(engine=engine, operation=operation, intervals=len(values),
+                                           average_union_ms_per_replay=duration(values)/replays/1000)
+                for (engine, operation), values in sorted(operations.items(), key=lambda item: -duration(item[1]))],
             'paired_intervals': {engine: len(values) for engine, values in intervals.items()},
             'compute_gap_bins': bins,
             'compute_edge_idle_ms_per_replay': (end-begin-compute_busy-sum(gaps))/replays/1000,

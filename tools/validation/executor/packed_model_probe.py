@@ -155,7 +155,7 @@ def main():
             for batch in args.cycle_batch_sweep or (len(prompts),):
                 for extent, binding_mode, gqa in ((n, mode, g) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
                                                   for mode in args.cycle_binding_sweep or ('static',)
-                                                  for g in args.cycle_gqa_sweep or ('folded',)):
+                                                  for g in args.cycle_gqa_sweep or ('broadcast',)):
                     cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts[:batch]],
                                   'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
                                   'cycles': args.cycle_steps, 'verify_rows': extent,

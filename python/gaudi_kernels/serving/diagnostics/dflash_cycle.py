@@ -47,7 +47,7 @@ def on_worker(worker, plan):
         return torch.cat(outputs, -1)
     draft = load_checkpoint(plan['draft_checkpoint'], runner.device, tp_rank=worker.rank,
                             tp_size=group.world_size, reduce_sum=reduce_sum, gather_output=gather_output)
-    draft.fold_gqa = plan.get('fold_gqa', True)
+    draft.fold_gqa = plan.get('fold_gqa', False)
     ids = tuple(str(i) for i in range(rows))
     capacities = {rid: len(prompt)+cycles*extent+extent for rid, prompt in zip(ids, prompts)}
     target = PackedTargetExecutor(runner, request_capacities=capacities,
