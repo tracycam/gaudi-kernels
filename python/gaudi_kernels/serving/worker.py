@@ -30,6 +30,25 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.packed_model import on_worker
         return on_worker(self, plan)
 
+    def packed_scheduled_configure(self, enabled):
+        from gaudi_kernels.engine.context import context
+        runner = self.model_runner
+        parallel = runner.vllm_config.parallel_config
+        if type(enabled) is not bool or runner.input_batch.num_reqs or context().native.active:
+            raise ValueError('Packed scheduling requires explicit bool, no requests and native replay disabled')
+        if (runner.speculative_config is not None or runner.use_async_scheduling or
+                parallel.pipeline_parallel_size != 1 or parallel.data_parallel_size != 1 or
+                runner.vllm_config.lora_config is not None or runner.vllm_config.kv_transfer_config is not None):
+            raise ValueError('Packed scheduled probe requires synchronous plain TP target execution')
+        records = getattr(runner, '_packed_scheduled_records', [])
+        if enabled:
+            if getattr(runner, '_packed_scheduled_failed', False):
+                raise ValueError('Failed packed step requires a fresh worker')
+            runner._packed_scheduled_records = []
+        runner._packed_scheduled_enabled = enabled
+        return {'rank': self.rank, 'enabled': enabled, 'records': records,
+                'scope': 'experimental actual allocator/sampler execution; synchronizing diagnostics, no native TPS claim'}
+
     def scheduled_token_audit(self, enabled=None, clear=False):
         """Bounded source-level diagnostics; no tensor values or device access."""
         if enabled is not None and type(enabled) is not bool:

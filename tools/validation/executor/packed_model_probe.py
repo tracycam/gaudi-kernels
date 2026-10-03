@@ -13,6 +13,8 @@ def main():
     p.add_argument('--small-only', action='store_true')
     p.add_argument('--serving-teacher', action='store_true',
                    help='Also compare packed multi-position logits against ordinary vLLM serving')
+    p.add_argument('--scheduled-serving', action='store_true',
+                   help='Also run the experimental compact consumer of actual scheduling and allocator KV')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -66,6 +68,9 @@ def main():
         result['pass'] = len(result['ranks']) == 8 and all(rank['pass'] for rank in result['ranks'])
         if not result['pass']:
             raise RuntimeError('Packed target all-query or continuation gate failed')
+        if args.scheduled_serving:
+            from tools.validation.executor.packed_serving_check import run
+            result['scheduled_serving'] = run(llm, args.out)
     finally:
         (args.out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
 

@@ -6,6 +6,12 @@ from gaudi_kernels.serving.model_adapter import adapter_class
 
 
 class NativeHPUModelRunner(hpu.HPUModelRunner):
+    def sample_tokens(self, grammar_output):
+        if getattr(self, '_packed_scheduled_enabled', False):
+            from gaudi_kernels.serving.executor.scheduled_target import sample_scheduled
+            return sample_scheduled(self, grammar_output)
+        return super().sample_tokens(grammar_output)
+
     def _prepare_inputs(self, scheduler_output, num_prefills, num_decodes, warmup=False):
         # Observe the scheduling source before the legacy plugin separates
         # prefill/decode and pads queries. No extra packing in timed replay.

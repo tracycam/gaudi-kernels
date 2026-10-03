@@ -19,7 +19,7 @@ class PackedTargetResult:
 
 
 class PackedTargetExecutor:
-    def __init__(self, runner, *, kv_capacity):
+    def __init__(self, runner, *, kv_capacity=None, session=None):
         self.runner = runner
         self.adapter = runner.model
         self.model = self.adapter.model
@@ -31,8 +31,8 @@ class PackedTargetExecutor:
                 geometries[name] = (impl.num_kv_heads, impl.head_size, impl.head_size_v)
             elif impl is not None:
                 raise ValueError('Loaded attention backend has no packed consumer: ' + name)
-        self.session = PackedKVSession(geometries, kv_capacity, device=runner.device,
-                                       dtype=runner.vllm_config.model_config.dtype)
+        self.session = session if session is not None else PackedKVSession(
+            geometries, kv_capacity, device=runner.device, dtype=runner.vllm_config.model_config.dtype)
 
     @torch.inference_mode()
     def execute(self, batch):
