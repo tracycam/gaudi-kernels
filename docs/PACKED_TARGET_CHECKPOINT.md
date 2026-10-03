@@ -97,6 +97,7 @@ private payloads and deployment manifests are not published.
 | S70 / `3dad706` |70-layer native SWA and advancing target replay | Functional checks and three same-program byte-exact replays passed on eight ranks;286 SDK submissions, retained storage released |
 | S70 / `3dad706` | Actual five-layer DFlash plus70-layer target,4K context | Four eager cycles passed finite/live-KV checks but accepted no drafts; subsequent audit found proposal-position wiring bug |
 | T70 / `d7e9782` | Corrected real DFlash proposal alignment,4086-token context,T4 | Eight eager cycles passed on all ranks; emitted counts1/1/4/4/4/2/1/4, mean2.625; eight ranks emitted identical IDs |
+| U70 / `f75426a` | Whole-cycle recording,B1/B2/B3 andT4/T8,real4K contexts | Six cases passed on all ranks, one capture and six advancing replays each; context/live-KV checks passed, retained storage released |
 
 The SDK counts describe different capture scopes, not a paired speedup. Neither
 count means one recipe or one hardware launch. No new full-model TPS, physical
@@ -136,6 +137,45 @@ SWA operand witnesses from eight ranks, covering200 queries. All were finite;
 the maximum relative L2 against the stored native output was0.001732. This
 uses BF16-stored Q/K/V and reconstructs causal/window visibility independently
 from the page descriptors; it is not a full-model quality gate.
+
+## Whole-cycle recording and actual routes
+
+U70 records drafting, target verification, greedy acceptance and accepted
+context writes. Replay invokes no intermediate Python model/verifier logic;
+it still submits314–315 SDK commands through C++ and synchronizes completion.
+CPU bindings and prefix promotion remain between cycles. This is a bounded
+private-arena diagnostic, not scheduler-integrated speculative serving or a
+single hardware launch. The B1,T4 proposal IDs, target predictions, emitted IDs
+and matched counts were identical to all eight corrected eager steps in T70.
+Every TP shard consumed identical route IDs in all six U70 cases.
+
+| Requests | Verify rows/request | Mean emitted/request/cycle | Median rank0 replay cycle,ms | Mean unique experts/layer |
+|---|---|---|---|---|
+|1|4|2.625|32.47|25.63|
+|1|8|4.875|34.39|42.67|
+|2|4|2.625|39.35|40.54|
+|2|8|2.9375|60.51|70.12|
+|3|4|2.7917|70.98|58.44|
+|3|8|3.5833|104.53|89.13|
+
+These eight-cycle samples include intrusive route snapshots. Cycle wall time
+includes bindings, replay/completion, a diagnostic all-rank vote and delivery;
+it is not device-engine time or service TPS. The native scan alone spent
+approximately5–7ms enqueueing SDK commands. Its time overlaps device work and
+must not be added to replay wall time as another independent cost.
+
+M<=2 accounts for94.7% of active experts at B1,T4 and75.4% at B3,T8.
+M>=8 accounts for only3.1% of active experts at B3,T8. Small-M TPC remains the
+primary route. B3,T8 has192 routed rows but approximately89 unique experts per
+layer: grouping has more potential than an independent-routing estimate, but
+unique byte counts are not measured physical HBM traffic. A backend change
+still needs complete-consumer-chain evidence.
+
+The next experiment separates CPU preparation, its device drain, SDK replay
+with completion, diagnostic votes and output delivery. Fixed-capacity page
+bindings avoid rebuilding changing-length history arrays. Only query positions
+and visibility lengths change; safe padded slots and prefix reservation are
+checked independently. No weight arithmetic or precision is changed.
 
 At133 rows the existing QKV policy selects BF16 activation arithmetic, whereas
 token-at-a-time execution selects block-A8. That is a deliberate policy difference,
