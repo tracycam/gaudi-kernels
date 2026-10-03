@@ -1,0 +1,46 @@
+#include <ATen/ATen.h>
+#include <torch/library.h>
+#include <hpu_custom_op_pt2.h>
+#include <climits>
+using T=at::Tensor;using V=std::vector<T>;using Meta=habana::PartialOutputMetaDataVector;
+namespace {
+void tensor(const T&t,at::ScalarType d,int rank){TORCH_CHECK(t.scalar_type()==d&&t.dim()==rank&&t.is_contiguous()&&!t.requires_grad()&&t.numel()>0&&t.numel()<=INT32_MAX,"expert partition tensor contract");}
+void devices(const at::Stack&s){auto d=s[0].toTensor().device();TORCH_CHECK(d.type()==at::kHPU||d.type()==at::kMeta,"HPU/Meta required");for(auto&v:s)if(v.isTensor())TORCH_CHECK(v.toTensor().device()==d,"same device required");}
+void status(const T&t){tensor(t,at::kInt,1);TORCH_CHECK(t.numel()==1,"status[1]");}
+Meta prefix_meta(const at::Stack&s){devices(s);auto n=s[0].toTensor(),f=s[1].toTensor();tensor(n,at::kInt,1);tensor(f,at::kInt,1);
+ auto r=s[2].toInt(),c=s[3].toInt(),b=s[4].toInt(),lo=s[5].toInt(),hi=s[6].toInt();
+ TORCH_CHECK(r>=1&&r<=8&&n.numel()>=r&&n.numel()<=384&&f.numel()<=513&&c>=1&&c<=f.numel()&&b>=1&&b<=n.numel()&&lo>=1&&lo<=hi&&hi<=c,"bounded expert bucket");
+ return{{at::kInt,{n.numel()+1}},{at::kInt,{b}},{at::kInt,{b}},{at::kInt,{b}},{at::kInt,{1}}};}
+Meta inverse_meta(const at::Stack&s){devices(s);auto x=s[0].toTensor(),f=s[1].toTensor(),p=s[2].toTensor(),off=s[4].toTensor();tensor(x,at::kInt,2);tensor(f,at::kInt,1);tensor(p,at::kInt,1);tensor(off,at::kInt,2);status(s[3].toTensor());auto c=s[5].toInt(),b=s[6].toInt();
+ TORCH_CHECK(x.size(0)<=513&&x.size(1)<=8&&p.numel()>=x.size(1)+1&&p.numel()<=385&&f.numel()==x.numel()&&off.size(0)==p.numel()-1&&off.size(1)==(x.numel()+63)/64+1&&c>=1&&c<=x.size(0)&&b>=1&&b<p.numel(),"bucket inverse geometry");return{{at::kInt,{x.numel()}}};}
+Meta map_meta(const at::Stack&s){devices(s);auto inv=s[0].toTensor(),v=s[1].toTensor();tensor(inv,at::kInt,1);tensor(v,at::kInt,1);status(s[2].toTensor());auto c=s[3].toInt();TORCH_CHECK(inv.numel()<=513*8&&v.numel()<=384&&c>=1&&c<=513,"bucket map geometry");return{{at::kInt,{v.numel()*c}}};}
+Meta gather_meta(const at::Stack&s){devices(s);auto x=s[0].toTensor(),map=s[1].toTensor();tensor(x,at::kBFloat16,2);tensor(map,at::kInt,1);status(s[2].toTensor());auto r=s[3].toInt(),c=s[4].toInt(),slot=s[5].toInt(),b=s[6].toInt();TORCH_CHECK(x.size(0)<=513&&x.size(1)==6144&&r>=1&&r<=8&&c>=1&&c<=x.size(0)&&slot>=0&&b>=1&&map.numel()%c==0&&slot+b<=map.numel()/c,"bucket gather geometry");return{{at::kBFloat16,{b,c,6144}}};}
+Meta gate_meta(const at::Stack&s){devices(s);auto p=s[0].toTensor(),v=s[1].toTensor();tensor(p,at::kFloat,3);tensor(v,at::kInt,1);status(s[2].toTensor());auto slot=s[3].toInt();TORCH_CHECK(p.size(2)==512&&p.size(1)<=513&&slot>=0&&slot+p.size(0)<=v.numel(),"bucket gate geometry");return{{at::kBFloat16,{p.size(0),p.size(1),256}}};}
+Meta combine_meta(const at::Stack&s){devices(s);auto p=s[0].toTensor(),r=s[1].toTensor(),inv=s[2].toTensor();tensor(p,at::kFloat,2);tensor(r,at::kFloat,2);tensor(inv,at::kInt,1);status(s[3].toTensor());TORCH_CHECK(p.size(1)>=512&&p.size(1)<=6144&&p.size(1)%512==0&&r.size(0)<=513&&r.size(1)<=8&&inv.numel()==r.numel(),"bucket combine geometry");return{{at::kFloat,{r.size(0),p.size(1)}}};}
+using Fn=Meta(*)(const at::Stack&);
+V run(const char*name,Fn fn,const at::Stack&s){auto m=fn(s);if(s[0].toTensor().device().type()==at::kMeta){V v;for(auto&o:m)v.push_back(at::empty(o.shape,s[0].toTensor().options().dtype(o.dtype)));return v;}auto op=habana::custom_op::UserCustomOpDescriptor::getUserCustomOpDescriptor(name);return op.execute(s);}
+std::shared_ptr<void> params(const at::Stack&s,size_t&n,int first,int count){n=count*4;auto p=std::shared_ptr<int[]>(new int[count]);for(int i=0;i<count;++i)p[i]=s[first+i].toInt();return std::shared_ptr<void>(p,p.get());}
+auto prefix(T n,T f,int64_t r,int64_t c,int64_t b,int64_t lo,int64_t hi){auto v=run("gaudi_expert_partition::prefix",prefix_meta,{n,f,r,c,b,lo,hi});return std::make_tuple(v[0],v[1],v[2],v[3],v[4]);}
+T inverse(T x,T f,T p,T st,T off,int64_t c,int64_t b){return run("gaudi_expert_partition::inverse",inverse_meta,{x,f,p,st,off,c,b})[0];}
+T row_map(T inv,T v,T st,int64_t c){return run("gaudi_expert_partition::row_map",map_meta,{inv,v,st,c})[0];}
+T gather(T x,T map,T st,int64_t r,int64_t c,int64_t slot,int64_t b){return run("gaudi_expert_partition::gather",gather_meta,{x,map,st,r,c,slot,b})[0];}
+T gate(T p,T v,T st,int64_t slot){return run("gaudi_expert_partition::gate",gate_meta,{p,v,st,slot})[0];}
+T combine(T p,T r,T inv,T st){return run("gaudi_expert_partition::combine",combine_meta,{p,r,inv,st})[0];}
+}
+TORCH_LIBRARY(gaudi_expert_partition,m){
+ m.def("prefix(Tensor counts, Tensor flags, int routes, int rows, int slots, int lower, int upper) -> (Tensor,Tensor,Tensor,Tensor,Tensor)");
+ m.def("inverse(Tensor ids, Tensor flat_ids, Tensor prefix, Tensor status, Tensor offsets, int rows, int slots) -> Tensor");
+ m.def("row_map(Tensor inverse, Tensor valid_rows, Tensor status, int rows) -> Tensor");
+ m.def("gather(Tensor x, Tensor row_map, Tensor status, int routes, int rows, int slot, int batch) -> Tensor");
+ m.def("gate(Tensor partial, Tensor valid_rows, Tensor status, int slot) -> Tensor");
+ m.def("combine(Tensor partial, Tensor routing, Tensor inverse, Tensor status) -> Tensor");
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::prefix","gk_expert_prefix",prefix_meta,[](const at::Stack&s,size_t&n){return params(s,n,2,5);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::inverse","gk_expert_inverse",inverse_meta,[](const at::Stack&s,size_t&n){return params(s,n,5,2);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::row_map","gk_expert_map",map_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,1);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::gather","gk_expert_gather",gather_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,3);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::gate","gk_expert_gate",gate_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,1);});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::combine","gk_expert_combine",combine_meta,[](const at::Stack&,size_t&n)->std::shared_ptr<void>{n=0;return nullptr;});
+}
+#define IMPL m.impl("prefix",prefix);m.impl("inverse",inverse);m.impl("row_map",row_map);m.impl("gather",gather);m.impl("gate",gate);m.impl("combine",combine);
+TORCH_LIBRARY_IMPL(gaudi_expert_partition,HPU,m){IMPL}
+TORCH_LIBRARY_IMPL(gaudi_expert_partition,Meta,m){IMPL}
