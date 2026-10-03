@@ -34,6 +34,9 @@ requirements; do not replace tuned kernels with a slower universal loop.
 - Remove unreachable historical modes, sorted execution and BF16-routing
   branches from the fixed FP32 production contract. Preserve explicit rejection
   of unsupported requests and the actual casts/materializations still required.
+- Include the existing serving `startup/sitecustomize.py` in the Python wheel;
+  package discovery alone omits this non-package startup directory, which the
+  installed launcher needs.
 - Preserve TPC/MME source, assembly, binary SHA pins, precision settings and the
   existing integrated replay implementation during this structural change.
 
