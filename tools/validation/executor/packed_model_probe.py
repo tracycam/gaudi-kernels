@@ -11,6 +11,8 @@ def main():
     p.add_argument('--layers', type=int, choices=(2, 70), default=2)
     p.add_argument('--model', required=True)
     p.add_argument('--small-only', action='store_true')
+    p.add_argument('--moe-row-probe', nargs='+', type=int, choices=(8,12,16,24),
+                   help='Component-only complete MoE chain on loaded weights; serving row guards unchanged')
     p.add_argument('--serving-teacher', action='store_true',
                    help='Also compare packed multi-position logits against ordinary vLLM serving')
     p.add_argument('--scheduled-serving', action='store_true',
@@ -80,6 +82,14 @@ def main():
                                  'moe_layer_freq': cfg['moe_layer_freq'][:2]}, num_gpu_blocks_override=256)
     llm = LLM(**opts)
     llm.collective_rpc('native_configure', args=(False, False, False, 'compact'))
+    if args.moe_row_probe:
+        ranks = llm.collective_rpc('moe_rows_probe', args=({'rows': args.moe_row_probe},))
+        result = dict(pass_=len(ranks) == 8 and all(r['pass'] for r in ranks), ranks=ranks)
+        result['pass'] = result.pop('pass_')
+        (args.out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
+        if not result['pass']:
+            raise RuntimeError('Complete MoE row coverage failed')
+        return
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
     plan['native_swa'] = args.native_packed_swa
     plan['defer_precision_gate'] = args.defer_precision_gate
