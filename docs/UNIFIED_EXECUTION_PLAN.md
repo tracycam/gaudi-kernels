@@ -1,7 +1,7 @@
 # Unified execution implementation plan
 
-Status: actual packed model/scheduler consumers and advancing two-layer recorder
-tested. See [current evidence and remaining work](PACKED_TARGET_CHECKPOINT.md).
+Status: actual packed model/scheduler consumers and advancing70-layer target recorder
+tested; full-cycle recording in device qualification. See [current evidence and remaining work](PACKED_TARGET_CHECKPOINT.md).
 Device/model completion is recorded separately.
 Baseline: public source commit `656b6f7`, development model baseline `a999894`.
 
@@ -27,9 +27,9 @@ remain outside plugin patches and outside public experiment payloads.
 |---|---|---|---|
 | C1 | Packed TokenBatch, output ownership, capability/capacity checks, vLLM scheduler adapter | [1,4,128] occupies133 valid rows, ragged/reordered/page-boundary checks, no private model dimensions | Actual two-layer mixed scheduler consumption tested; default production admission pending |
 | C2 | KV view/write staging and explicit computed/committed/emitted results | No live KV overwrite, prefix-only commit, reject/abort/EOS/budget ownership, continued attention after rejection | Exclusive arena prefixes and ordinary allocator borrowing tested; speculative allocator promotion/COW/events pending |
-| C3 | Target-only mixed layer and model execution | Every request/query compared; padding excluded; regular and sliding-window causal visibility | Actual two-layer model passes;70-layer real-text continuation failure being localized |
-| C4 | Native packed target runtime | Replay same capacity without request-ID recompilation, validate-before-mutation, partial failure invalidates plan, clean teardown | Advancing two-layer target recording tested;70-layer/dynamic service qualification incomplete |
-| C5 | Complete NextN cycle, then DFlash using same target/KV interface | Actual accepted prefixes and full answers; all rejection paths; full-cycle TPS and conditional acceptance | Real target feature interface tested on two layers; complete cycles not connected |
+| C3 | Target-only mixed layer and model execution | Every request/query compared; padding excluded; regular and sliding-window causal visibility | 70-layer structural checks passed; historical floating thresholds reported separately; serving admission pending |
+| C4 | Native packed target runtime | Replay same capacity without request-ID recompilation, validate-before-mutation, partial failure invalidates plan, clean teardown | Advancing70-layer target recording tested; full-cycle/dynamic service qualification incomplete |
+| C5 | Complete NextN cycle, then DFlash using same target/KV interface | Actual accepted prefixes and full answers; all rejection paths; full-cycle TPS and conditional acceptance | 70-layer target features and real eager DFlash cycle connected; proposal alignment corrected; recording/quality/TPS pending |
 | C6 | Expert-M dispatch, tiled KV reuse, fusion and explicit layer plans | Complete consuming-chain A/B, real route distributions, cold working set, physical traffic where observable | Not complete |
 | C7 | Public rebuild and HTTP service | Documented dependencies/artifact generation, pinned plugin interface, concurrency/cancellation/mixed arrival, resource plateau and exit | Not complete |
 
@@ -55,8 +55,10 @@ milestones, but do not themselves admit full-model native verification.
 ## Validation
 
 Metadata, codec bits, output provenance and KV ownership require exact checks.
-Floating arithmetic uses the selected GPU-like quantization contract and FP32
-accumulation/reference; legitimate accumulation-tree differences are accepted.
+Floating arithmetic uses FP32 accumulation/reference; legitimate accumulation-tree
+differences are accepted. Precision selection and prior quality thresholds are
+explicitly deferred by the user. Preserve these measurements without using them
+as a substitute for diagnosing wrong indexing, layouts, masks or scale math.
 Do not require FP64 agreement or use aggregate relative error alone to excuse
 mask/scale/near-zero bugs. Complete answers and task quality are a separate gate
 from teacher-forced layer/logit diagnostics.

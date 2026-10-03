@@ -15,13 +15,17 @@ benchmark or a general model-quality certification.
 | Fusion numerical check | 35 aligned full-logit queries bitwise equal; tested generated token sequences equal |
 | Multirow arithmetic vs prior policy | Maximum teacher-forced KL about 0.00422 (B2) and 0.00789 (B3); this comparison is not bitwise equality |
 | Native automatic startup | Two-layer TP8 check, 12 native steps per rank before benchmark enable RPC |
-| Full native MTP/DFlash cycle | Not complete; no qualified 170 tokens/s result |
+| Full native MTP/DFlash cycle | Real eager functional cycle connected; corrected proposal alignment and full-cycle recording undergoing device tests; no qualified170 tokens/s result |
 
-Subsequent [packed target work](PACKED_TARGET_CHECKPOINT.md) has passed two-layer
-actual mixed scheduling, three advancing target replays from one capture, and
-independent decoder-feature checks. These are functional diagnostics, not new
-serving performance. A70-layer real-text rejected-prefix continuation comparison
-still fails (maximum KL0.01359), so native speculative admission remains closed.
+Subsequent [packed target work](PACKED_TARGET_CHECKPOINT.md) passed actual
+two-layer mixed scheduling and70-layer native SWA, advancing target replay and
+independent target-feature checks on eight ranks. Three changing target replays
+were byte-exact against the same eager program. These are functional diagnostics,
+not new serving performance. Historical floating thresholds are now reported
+separately under the user's deferred-precision rule. Serving speculative
+admission remains closed for allocator/lifetime/full-cycle work, rather than
+requiring FP64 agreement. A DFlash proposal-position bug was found and fixed;
+the earlier zero-acceptance smoke result is not a valid drafter assessment.
 
 The multi-request generation test used a private 4K code-review corpus, greedy
 sampling, and a 96-token output budget. The common decode window begins after

@@ -51,7 +51,8 @@ CPU preparation between steps, and no device sampler/drafter cycle here.
 Its optional native SWA consumer uses the existing pinned multi-query FP32 TPC
 kernel for its qualified geometry; other shapes use tiled attention. It preserves
 the qualified graph-owned reshape edges required by the Lazy CustomOp bridge.
-Device qualification of this newly connected consumer is tracked separately.
+The connected native SWA consumer passed two-layer and70-layer functional
+checks after preserving the original query producer at the CustomOp boundary.
 No weight representation or MoE dispatch is changed by the page arena.
 
 ## Actual scheduler consumption
@@ -91,18 +92,38 @@ private payloads and deployment manifests are not published.
 | J / `a2c19ac` | Static same-address target recorder | Three repeated replays byte-exact on eight ranks;20 SDK submissions per captured two-layer target |
 | M / `b21f846` | Advancing target recorder,13 query rows | One capture, three mutated replays, changing token/position/KV inputs and partial commits; all eight ranks passed;13 SDK submissions |
 | M / `b21f846` | Real decoder features, layers0/1 |13 rows per feature; independent boundary comparison exact; hidden/logits unchanged; capture policy restored |
-| K70 / `f3a3968` |70-layer query and continuation check | Random ragged case passed; real-text query/ordinary-teacher checks passed, but continuation failed with maximum KL0.01359; not admitted |
+| K70 / `f3a3968` |70-layer query and continuation check | Structural checks passed; historical floating threshold failed with maximum KL0.01359 |
+| R / `bd427e1` | Connected native SWA, two layers | All-query, continuation, features and three advancing replays passed on eight ranks |
+| S70 / `3dad706` |70-layer native SWA and advancing target replay | Functional checks and three same-program byte-exact replays passed on eight ranks;286 SDK submissions, retained storage released |
+| S70 / `3dad706` | Actual five-layer DFlash plus70-layer target,4K context | Four eager cycles passed finite/live-KV checks but accepted no drafts; subsequent audit found proposal-position wiring bug |
 
 The SDK counts describe different capture scopes, not a paired speedup. Neither
 count means one recipe or one hardware launch. No new full-model TPS, physical
 HBM traffic, MTP acceptance rate or complete-answer quality is claimed.
 
-The70-layer real-text failure persists after freezing outputs before every
-oracle invocation. Old KV bytes, prefix slot coverage and future isolation pass.
-The first accepted-KV difference is at layer19; operator-boundary diagnostics
-are tracing the preceding arithmetic. Output-buffer reuse is no longer a viable
-explanation for that remaining difference. Do not classify it as harmless FP32
-rounding or change the gate without identifying the originating operation.
+The historical continuation discrepancy was localized at layer17 output
+projection: QKV, attention and output-projection input were exact, while the
+output first differed by0.0001220703125 in one row. Different collective
+addition trees are a plausible source; local MME and collective contributions
+were not independently isolated. This is no longer a reason to block functional
+work: the user explicitly defers precision selection and accepts legitimate
+floating accumulation differences. `--defer-precision-gate` preserves numerical
+measurements separately from finite/KV/causality checks; it does not excuse
+wrong layouts, masks, scales, nonfinite outputs or stale storage.
+
+Two actual implementation errors were fixed rather than labelled rounding:
+returning reusable output buffers, and passing a temporary query view into the
+Lazy SWA CustomOp. The latter caused NaNs/invalid storage; preserving the
+original producer and graph-owned reshape fixed it.
+
+DFlash is a same-position denoiser. Hidden position0 reconstructs the known
+anchor, and positions1 onward propose masked tokens. The first full-cycle
+composition incorrectly selected position0 as draft1. Commit `fb953b9` fixes
+that offset and applies the LM head only to the valid proposal rows. The
+regression fixture now models a same-position denoiser, so the old wiring fails
+it. The matching local SGLang source was pinned at
+`f748ae35a26fbe1be98db09967ffb828658b821a`. The initial zero-acceptance result
+must not be used to judge checkpoint acceptance; corrected device runs follow.
 
 At133 rows the existing QKV policy selects BF16 activation arithmetic, whereas
 token-at-a-time execution selects block-A8. That is a deliberate policy difference,
@@ -129,10 +150,11 @@ downloadable deployment. The70-layer diagnostic selects `--layers 70` and can
 use `--trace-layers 17 18 19 20`. Hardware runs must first
 verify ownership/idle state; the owned `run_model` supervisor supplies those checks.
 
-Next, identify and repair the70-layer continuation discrepancy, qualify the
-connected native SWA consumer and advancing70-layer replay, then connect real
-target features to the existing DFlash drafter and device greedy acceptance.
-Allocator staging/COW and completion-safe promotion must precede serving
-admission. Measure actual tau and full-cycle/per-request TPS only after those
-boundaries work. Small-M TPC MoE remains qualified; large-M compact regressions
-and the slower all-MME small-batch pipeline are not promoted.
+Next, measure corrected real DFlash acceptance and qualify whole-cycle
+recording (drafter, target, verifier and accepted context writes). CPU
+substitute coverage includes ragged requests and a no-draft bypass. The new
+whole-cycle recorder and B1/B2/B3,T4/T8 resident-model sweep are experimental;
+adding them does not establish device qualification or service TPS.
+Allocator staging/COW and completion-safe promotion still precede serving
+admission. Small-M TPC MoE remains qualified; large-M compact regressions and
+the slower all-MME small-batch pipeline are not promoted.

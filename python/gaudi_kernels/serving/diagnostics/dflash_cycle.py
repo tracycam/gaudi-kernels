@@ -18,6 +18,7 @@ def on_worker(worker, plan):
     from gaudi_kernels.serving.draft.dflash import load_checkpoint
     from gaudi_kernels.serving.draft.cycle import DFlashCycle
     from gaudi_kernels.serving.executor.packed_bindings import BoundKVSession
+    from gaudi_kernels.serving.executor.packed_bindings import PackedInputBuffers
     from gaudi_kernels.serving.executor.packed_target import PackedTargetExecutor
 
     runner = worker.model_runner
@@ -31,6 +32,10 @@ def on_worker(worker, plan):
             any(not row or len(row) > 8192-cycles*extent-extent for row in prompts)):
         raise ValueError('Bounded DFlash smoke requests/context/cycles required')
     group = get_tp_group()
+    def vote(ready):
+        flag = torch.tensor([int(ready)], dtype=torch.int32)
+        dist.all_reduce(flag, op=dist.ReduceOp.MIN, group=group.cpu_group)
+        return bool(flag.item())
     def reduce_sum(tensor):
         htcore.mark_step()
         dist.all_reduce(tensor, group=group.device_group)
@@ -69,13 +74,20 @@ def on_worker(worker, plan):
     remaining = torch.full((rows,), cycles*extent+1, device=runner.device, dtype=torch.int32)
     arena = target.session
     target.session = BoundKVSession(arena, (extent,)*rows, max(capacities.values()))
-    root = context().startup.run_dir/'dflash-target-cycle'
+    label = plan.get('label', 'dflash-target-cycle')
+    if type(label) is not str or not label or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in label):
+        raise ValueError('Cycle evidence label must be a simple local directory name')
+    root = context().startup.run_dir/label
     root.mkdir(exist_ok=True)
     report = {'rank': worker.rank, 'pass': False, 'cycles': [], 'source_target_layers': 70,
               'drafter_layers': draft.spec.layers, 'drafter_block': draft.spec.block, 'verify_rows': extent,
               'proposal_hidden_positions': list(range(1, extent)),
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
+    recorded = bool(plan.get('record_cycle', False))
+    recorder, binding = None, None
+    if recorded and cycles < 3:
+        raise ValueError('Recorded cycle needs eager warmup, capture and at least one replay')
     try:
         for step in range(cycles):
             starts = tuple(len(arena.committed[rid]) for rid in ids)
@@ -85,11 +97,23 @@ def on_worker(worker, plan):
                         for t in tensors) for name, tensors in arena.caches.items()}
             began = time.perf_counter_ns()
             metadata = target.session.prepare(schedule)
-            result = coordinator.run_prepared(schedule, metadata, anchors, remaining)
+            execution = {'kind': 'eager-warmup' if recorded else 'eager'}
+            if recorded and step == 1:
+                from gaudi_kernels.serving.diagnostics.cycle_recorder import CycleRecorder
+                binding = PackedInputBuffers(schedule, runner.device)
+                recorder = CycleRecorder(coordinator, binding, metadata, root, worker.rank, vote)
+                result = recorder.capture(schedule, metadata, anchors, remaining)
+                execution = {'kind': 'capture', **recorder.record}
+            elif recorded and step > 1:
+                result, timing = recorder.replay(schedule, metadata)
+                execution = {'kind': 'recorded-replay', **timing}
+            else:
+                result = coordinator.run_prepared(schedule, metadata, anchors, remaining)
             output = coordinator.finish_at_output_boundary(result)
             elapsed = time.perf_counter_ns()-began
             emitted = tuple(len(row.emitted_tokens) for row in output.requests)
-            anchors = result.next_anchor_ids.clone()
+            # Keep external input addresses stable for the recorded cycle.
+            anchors.copy_(result.next_anchor_ids)
             remaining.sub_(result.verification.emitted_counts)
             old_slots = tuple(s for rid, start in zip(ids, starts) for s in arena.committed[rid][:start])
             index = torch.tensor(old_slots, device=runner.device, dtype=torch.int64)
@@ -97,6 +121,7 @@ def on_worker(worker, plan):
                 tensor.index_select(0, index).cpu().contiguous().view(torch.uint8))
                 for name, tensors in arena.caches.items() for saved, tensor in zip(before[name], tensors))
             record = {'step': step, 'starts': starts, 'emitted': emitted,
+                      'execution': execution,
                       # These readbacks are outside the measured device chain,
                       # after output delivery. Keep proposal/target alignment
                       # visible; acceptance alone cannot diagnose bad indexing.
@@ -107,7 +132,15 @@ def on_worker(worker, plan):
                       'eager_cycle_wall_ns': elapsed, 'old_target_kv_bytes_unchanged': unchanged,
                       'finite': bool(torch.isfinite(result.target.hidden).all().cpu() and
                                      torch.isfinite(result.target.logits).all().cpu())}
+            _, ring_positions, ring_valid = coordinator.context.state()
+            actual_positions = ring_positions.cpu()
+            actual_valid = ring_valid.cpu()
+            record['committed_context_positions_correct'] = all(
+                sorted(actual_positions[i][actual_valid[i]].tolist()) ==
+                list(range(max(0, start+n-draft.spec.window), start+n))
+                for i, (start, n) in enumerate(zip(starts, emitted)))
             record['pass'] = (unchanged and record['finite'] and all(1 <= n <= extent for n in emitted) and
+                              record['committed_context_positions_correct'] and
                               all(len(arena.committed[rid]) == start+n for rid, start, n in zip(ids, starts, emitted)))
             report['cycles'].append(record)
             if not record['pass']:
@@ -119,5 +152,9 @@ def on_worker(worker, plan):
         report['error'] = repr(error)
         raise
     finally:
+        if recorder is not None:
+            report['release_code'] = recorder.release()
+            if report['release_code']:
+                report['pass'] = False
         (root/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     return report

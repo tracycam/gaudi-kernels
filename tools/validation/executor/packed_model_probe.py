@@ -35,9 +35,23 @@ def main():
                    help='Private JSON list of prompt_token_ids objects; never published with source')
     p.add_argument('--cycle-steps', type=int, default=4)
     p.add_argument('--cycle-verify-rows', type=int, default=4)
+    p.add_argument('--record-dflash-cycle', action='store_true',
+                   help='Record the whole fixed-extent cycle after one eager warmup; not serving admission')
+    p.add_argument('--cycle-batch-sweep', nargs='+', type=int, choices=(1, 2, 3),
+                   help='Reuse one resident target to diagnose these independent request counts')
+    p.add_argument('--cycle-row-sweep', nargs='+', type=int, choices=tuple(range(2, 9)),
+                   help='Reuse one resident target to diagnose these target verify extents')
     args = p.parse_args()
     if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
         p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
+    if args.record_dflash_cycle and (not args.dflash_cycle or args.cycle_steps < 3):
+        p.error('Cycle recording requires --dflash-cycle and at least three cycles')
+    if (args.cycle_batch_sweep or args.cycle_row_sweep) and not args.dflash_cycle:
+        p.error('Cycle sweeps require --dflash-cycle')
+    if args.dflash_cycle:
+        prompts = json.loads(args.cycle_prompts.read_text())
+        if args.cycle_batch_sweep and max(args.cycle_batch_sweep) > len(prompts):
+            p.error('Cycle sweep needs a real prompt fixture per independent request')
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
     from vllm import LLM, SamplingParams
@@ -116,17 +130,27 @@ def main():
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
         if args.dflash_cycle:
-            prompts = json.loads(args.cycle_prompts.read_text())
-            cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts],
-                          'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
-                          'cycles': args.cycle_steps, 'verify_rows': args.cycle_verify_rows}
-            result['dflash_cycles'] = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
-            if len(result['dflash_cycles']) != 8 or not all(r['pass'] for r in result['dflash_cycles']):
-                raise RuntimeError('Real DFlash/target cycle functional check failed')
-            emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in result['dflash_cycles']]
-            result['dflash_replicas_equal'] = all(values == emitted[0] for values in emitted)
-            if not result['dflash_replicas_equal']:
-                raise RuntimeError('DFlash/target emitted IDs differ across TP ranks')
+            sweep = args.cycle_batch_sweep or args.cycle_row_sweep
+            result['dflash_sweep'] = []
+            for batch in args.cycle_batch_sweep or (len(prompts),):
+                for extent in args.cycle_row_sweep or (args.cycle_verify_rows,):
+                    cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts[:batch]],
+                                  'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
+                                  'cycles': args.cycle_steps, 'verify_rows': extent,
+                                  'record_cycle': args.record_dflash_cycle,
+                                  'label': f'dflash-b{batch}-t{extent}' if sweep else 'dflash-target-cycle'}
+                    ranks = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
+                    emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in ranks]
+                    equal = len(ranks) == 8 and all(values == emitted[0] for values in emitted)
+                    entry = dict(batch=batch, verify_rows=extent, ranks=ranks, replicas_equal=equal)
+                    result['dflash_sweep'].append(entry)
+                    if not sweep:
+                        result.update(dflash_cycles=ranks, dflash_replicas_equal=equal)
+                    # Persist each case before the next RPC. A later case's
+                    # failure cannot erase already completed private evidence.
+                    (args.out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
+                    if len(ranks) != 8 or not all(r['pass'] for r in ranks) or not equal:
+                        raise RuntimeError('Real DFlash/target functional or TP-replica check failed')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
         result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})
