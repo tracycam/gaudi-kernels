@@ -11,10 +11,12 @@ def main():
     p.add_argument('--layers', type=int, choices=(2, 70), default=2)
     p.add_argument('--model', required=True)
     p.add_argument('--small-only', action='store_true')
+    p.add_argument('--serving-teacher', action='store_true',
+                   help='Also compare packed multi-position logits against ordinary vLLM serving')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
-    from vllm import LLM
+    from vllm import LLM, SamplingParams
     if context().startup.layers != args.layers:
         raise ValueError('Explicit layer scope mismatch')
     opts = dict(model=args.model, trust_remote_code=True, tensor_parallel_size=8,
@@ -33,6 +35,31 @@ def main():
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
     if not args.small_only:
         plan['cases'].append({'name': 'ragged-133', 'rows': [1, 4, 128], 'starts': [127, 126, 0], 'commits': [0, 2, 128]})
+    if args.serving_teacher:
+        from tools.validation.executor.batch_quality import generate_with_ids, attach_owners
+        base = llm.get_tokenizer().encode('The quick brown fox jumps over the lazy dog. ')
+        prompts = [{'prompt_token_ids': (base * 128)[:125 + i]} for i in range(3)]
+        llm.collective_rpc('production_quality_capture', args=('packed-serving-control', 'batch', 3))
+        outputs, mapping = generate_with_ids(llm, prompts,
+            SamplingParams(temperature=0, max_tokens=5, ignore_eos=True))
+        ranks = llm.collective_rpc('production_quality_capture', args=(None,))
+        frames = next(rank['captured_forwards'] for rank in ranks if rank['rank'] == 0)
+        attach_owners(frames, outputs, mapping)
+        rows = [[] for _ in prompts]
+        for frame in frames:
+            for logit_row, (owner, query) in enumerate(zip(frame['request_indices'], frame['logits_indices'])):
+                if owner is not None:
+                    rows[owner].append({'position': frame['positions'][query], 'token': frame['input_ids'][query],
+                                        'path': frame['path'], 'row': logit_row})
+        for index, values in enumerate(rows):
+            values.sort(key=lambda value: value['position'])
+            start = len(prompts[index]['prompt_token_ids'])
+            if [value['position'] for value in values] != list(range(start, start + 4)):
+                raise ValueError('Incomplete ordinary serving teacher query coverage')
+        plan['cases'].append({'name': 'serving-teacher', 'rows': [4, 4, 4], 'starts': [125, 126, 127],
+                              'commits': [4, 4, 4], 'prefix_tokens': [p['prompt_token_ids'] for p in prompts],
+                              'query_tokens': [[row['token'] for row in values] for values in rows],
+                              'serving_rows': [row for values in rows for row in values]})
     result = {'layers': args.layers, 'plan': plan, 'scope': 'real weights; target-only; not full model quality or throughput'}
     try:
         result['ranks'] = llm.collective_rpc('packed_target_probe', args=(plan,))

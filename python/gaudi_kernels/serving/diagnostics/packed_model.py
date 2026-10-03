@@ -22,14 +22,16 @@ def on_worker(worker, plan):
         sequential = PackedTargetExecutor(runner, kv_capacity=capacity)
         histories = []
         for index, start in enumerate(starts):
-            tokens = tuple((11 + index * 17 + p * 13) % vocabulary for p in range(start))
+            tokens = tuple(case['prefix_tokens'][index]) if 'prefix_tokens' in case else tuple(
+                (11 + index * 17 + p * 13) % vocabulary for p in range(start))
             histories.append(tokens)
             if start:
                 batch = TokenBatch((RequestTokens(str(index), tokens, 0, 'prefill'),))
                 for executor in (packed, sequential):
                     value = executor.execute(batch)
                     executor.commit(value, (start,))
-        requests = tuple(RequestTokens(str(i), tuple((101 + i * 19 + p * 7) % vocabulary for p in range(n)),
+        requests = tuple(RequestTokens(str(i), tuple(case['query_tokens'][i]) if 'query_tokens' in case else
+                         tuple((101 + i * 19 + p * 7) % vocabulary for p in range(n)),
                          starts[i], 'decode' if n == 1 else ('verify' if i == 1 else 'prefill'), tuple(range(n)))
                          for i, n in enumerate(rows))
         batch = TokenBatch(requests, BatchCapacity(sum(rows) + 11, len(rows) + 1, sum(rows) + 1))
@@ -42,11 +44,16 @@ def on_worker(worker, plan):
         for name, module in packed.model.named_modules():
             if name.endswith(('qkv_proj', 'o_proj', 'moe_op')):
                 handles.append(module.register_forward_pre_hook(hook(name)))
+        from gaudi_kernels.production_integration import snapshot as block_snapshot
+        before_branches = block_snapshot()['python_apply_branch_counts']
         try:
             candidate = packed.execute(batch)
         finally:
             for handle in handles:
                 handle.remove()
+        after_branches = block_snapshot()['python_apply_branch_counts']
+        branch_delta = {key: value - before_branches.get(key, 0) for key, value in after_branches.items()
+                        if value != before_branches.get(key, 0)}
         reference_hidden, reference_logits = [], []
         for request in requests:
             for local, token in enumerate(request.token_ids):
@@ -65,10 +72,22 @@ def on_worker(worker, plan):
         row = {'name': case['name'], 'rows': rows, 'valid_rows': batch.num_tokens,
                'capacity_rows': batch.capacity.token_rows, 'output_owners': candidate.output_owners,
                'calls': calls, 'checks': checks,
+               'qkv_arithmetic_branches': branch_delta,
                'hidden_relative_l2': (delta.norm() / expected_hidden.float().norm()).item(),
                'hidden_max_abs': delta.abs().max().item(),
                'all_query_pass': all(check['pass'] for check in checks),
                'every_shared_call_compact': bool(calls) and all(call['rows'] == sum(rows) for call in calls)}
+        if 'serving_rows' in case:
+            cache = {}
+            teacher_checks = []
+            for index, source in enumerate(case['serving_rows']):
+                if source['path'] not in cache:
+                    cache[source['path']] = torch.load(source['path'], weights_only=True, map_location='cpu')['logits']
+                baseline = cache[source['path']][source['row']:source['row']+1]
+                teacher_checks.append(compare_logits(baseline, actual_logits[index:index+1],
+                                                      contract='fp32_arithmetic_v1'))
+            row['serving_teacher_checks'] = teacher_checks
+            row['serving_teacher_pass'] = all(check['pass'] for check in teacher_checks)
         # Mutate only future verify queries; neither prior logits nor other
         # requests may change. This detects masks and cross-row quantization.
         packed.abort(candidate)
@@ -116,7 +135,7 @@ def on_worker(worker, plan):
         (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     report['pass'] = all(c['all_query_pass'] and c['continuation_pass'] and c['every_shared_call_compact']
                          and c['future_request_isolation_exact']
+                         and c.get('serving_teacher_pass', True)
                          for c in report['cases'])
     (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     return report
-
