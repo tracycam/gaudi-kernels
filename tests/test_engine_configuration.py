@@ -94,6 +94,20 @@ class ConfigurationTests(unittest.TestCase):
         for rows in (2, 3, 4, 16, 512):
             self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.broadcast')
 
+    def test_grouped_shapes_are_explicit_and_preserve_small_batch(self):
+        cfg = EngineConfig.from_dict({'decode': {'moe': {'dispatch': {
+            'grouped_rows': [512, 2048, 4096]}}}})
+        table = DispatchTable(cfg)
+        for rows in (1, 2, 8):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.compact')
+        for rows in (16, 513, 1024):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.broadcast')
+        for rows in (512, 2048, 4096):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.grouped')
+        for rows in ([1], [512, 512], [8192], [True]):
+            with self.assertRaises(ConfigError):
+                EngineConfig.from_dict({'decode': {'moe': {'dispatch': {'grouped_rows': rows}}}})
+
     def test_unqualified_executor_or_native_batch_refused(self):
         for runtime in ({'executor': 'native_graph'}, {'buckets': {'batch': [1, 2]}}):
             with self.assertRaises(ValueError):

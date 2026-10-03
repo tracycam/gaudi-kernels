@@ -218,6 +218,10 @@ def configure_policy(worker, document):
     sum_policy = 'moe_final_bf16' if d.moe.combine.sum_dtype == 'bf16' else 'baseline'
     validate_sum(sum_policy)
     validate_rows(d.moe.dispatch.compact_rows)
+    if d.moe.dispatch.grouped_rows:
+        from .grouped_moe_runtime import prepare as prepare_grouped, validate_rows as validate_grouped
+        validate_grouped(d.moe.dispatch.grouped_rows)
+        prepare_grouped()
     required = ['block_fp8', 'norm', 'swa', 'qkv_post', 'folded', 'down', 'router_post']
     if any((not runtime.has(name) for name in required)):
         raise ValueError('Incomplete qualified installation')
@@ -277,7 +281,7 @@ def configure_policy(worker, document):
     from gaudi_kernels.serving.executor.router_post_runtime import set_policy as set_router
     router = set_router('vector' if d.moe.router.post == 'vector_top8' else 'vendor')
     from gaudi_kernels.serving.executor.moe_dispatch_runtime import set_rows
-    dispatch = set_rows(d.moe.dispatch.compact_rows)
+    dispatch = set_rows(d.moe.dispatch.compact_rows, d.moe.dispatch.grouped_rows)
     from gaudi_kernels.serving.executor.moe_sum_bf16_runtime import set_policy as set_sum
     moe_sum = set_sum(sum_policy)
     runtime.selection = selected

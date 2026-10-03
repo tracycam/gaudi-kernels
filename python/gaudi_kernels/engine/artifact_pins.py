@@ -34,3 +34,12 @@ PINS = {'batch.torch': 'fd95be3c7dc08d099489fe1dbe88498a8109fbbc43387c263c85e17c
 # complete-model/MTP quality. The bundle forwards all six original SWA ELFs.
 PINS.update({'swa_bundle.tpc':'7c76d728c79186ddb01ef7718c0482e377465e9e15a6c7bf20378be4c18ca8fc',
              'swa_batch.torch':'c4c4697376933ac75bf66d675bee31794dbee9b581cd42c3a90a89fa53c1a12d'})
+
+# Owned expert backend + unchanged batch provider, one SDK database. Byte
+# identity is not a full-model performance or quality claim.
+PINS.update({
+    'moe_bundle.tpc': '01d687d2b315dea1f223cf9e665c8aea68a6fe91bc820992e24dd5fe1dc20b38',
+    'expert.torch': '74cbde5379b3a78d354142173e0a7255a18603eaad94fd12771af4ae822ef8b1',
+    'moe_batch_provider.host': PINS['batch.tpc'],
+    'moe_expert_provider.host': 'b86ddfb38a6a8eda01b986edf4139bcb1a8aea625dceda60871dd395244aef40',
+})

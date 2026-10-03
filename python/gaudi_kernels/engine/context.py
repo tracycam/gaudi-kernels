@@ -135,7 +135,7 @@ def initialize(document, *, directory):
             raise ConfigError('Artifact path/hash must be strings')
         if len(binding['sha256']) != 64 or any(c not in '0123456789abcdef' for c in binding['sha256']):
             raise ConfigError('Artifact SHA256 must be lowercase hexadecimal')
-        if name.endswith(('.torch', '.tpc')) or name=='tensor_hold.host':
+        if name.endswith(('.torch', '.tpc')) or name in PINS:
             if name not in PINS or PINS[name]!=binding['sha256']:
                 raise ConfigError('Unqualified executable artifact: '+name)
         path = Path(binding['path'])
@@ -143,6 +143,16 @@ def initialize(document, *, directory):
             path = base / path
         artifact = Artifact(path.resolve(strict=True), binding['sha256']).verify()
         artifacts[name] = artifact
+    if 'moe_bundle.tpc' in artifacts:
+        if 'batch.tpc' in artifacts:
+            raise ConfigError('Batch provider cannot be registered twice')
+        directory = artifacts['moe_bundle.tpc'].path.parent
+        for key, filename in (('moe_batch_provider.host', 'provider_batch.so'),
+                              ('moe_expert_provider.host', 'provider_expert.so')):
+            if key not in artifacts or artifacts[key].path != directory / filename:
+                raise ConfigError('Missing or misplaced MoE provider: ' + key)
+    elif any(key in artifacts for key in ('expert.torch', 'moe_batch_provider.host', 'moe_expert_provider.host')):
+        raise ConfigError('Expert operators require their shared TPC database')
     candidate = ExecutionContext(Startup(**options), MappingProxyType(artifacts),
                                  PolicySelection.from_dict(document['selection']))
     _CONTEXT = candidate

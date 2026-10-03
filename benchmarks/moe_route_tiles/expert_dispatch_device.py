@@ -6,12 +6,13 @@ Actual expert sets change between replays; debug metadata is not in timed graphs
 import argparse,hashlib,json,os,statistics,sys,time,traceback
 from pathlib import Path
 p=argparse.ArgumentParser()
-p.add_argument('--tokens',type=int,choices=(8,32,128,512,513),required=True)
+p.add_argument('--tokens',type=int,choices=(8,32,128,512,513,1024,2048,4096),required=True)
 p.add_argument('--thresholds',type=int,nargs='+',default=[64])
 p.add_argument('--self-contained',action='store_true')
 p.add_argument('--partition-library',type=Path,required=True)
 p.add_argument('--padding-mode',type=int,choices=(0,1,2))
 p.add_argument('--tpc-schedule',choices=('contiguous','queue'),default='contiguous')
+p.add_argument('--down-n-tile',type=int,choices=(512,1024,2048),default=2048)
 p.add_argument('--workspace-mib',type=int,default=1024)
 p.add_argument('--max-slots',type=int,default=0)
 p.add_argument('--row-caps',type=int,nargs='*',default=[])
@@ -56,7 +57,7 @@ try:
  with torch.inference_mode():
   cpu=torch.load(fixture,map_location='cpu',weights_only=False)
   for key in ('x','ids','routing'):
-   cpu[key]=cpu[key][:a.tokens].clone() if a.tokens<=512 else torch.cat((cpu[key],cpu[key][-1:]),0)
+   cpu[key]=cpu[key].repeat(((a.tokens+cpu[key].shape[0]-1)//cpu[key].shape[0],1))[:a.tokens].clone()
   states={}
   for state in a.states:
    values={k:cpu[k].clone() for k in ('x','ids','routing')}
@@ -70,7 +71,8 @@ try:
    elif state not in ('checkpoint','restored'):raise ValueError('unknown input state')
    states[state]=values
   owners={k:v.to('hpu') for k,v in cpu.items()};sync()
-  plans={f'm{n}':ExpertPlan(n,workspace_budget=a.workspace_mib*1024**2,max_slots_per_bucket=a.max_slots,row_caps=tuple(a.row_caps)) for n in a.thresholds};variants=('broadcast',*plans)
+  plans={f'm{n}':ExpertPlan(n,down_n_tile=a.down_n_tile,workspace_budget=a.workspace_mib*1024**2,max_slots_per_bucket=a.max_slots,row_caps=tuple(a.row_caps)) for n in a.thresholds};variants=('broadcast',*plans)
+  report['input_rows_scope']='saved real rows' if a.tokens<=512 else 'repeated saved rows; synthetic large-T route coverage, not real model prefill'
   report['plans']={k:{**v.costs(a.tokens,8,384),'buckets':[b.__dict__ for b in v.buckets(a.tokens,8,384)]} for k,v in plans.items()}
   graphs={};outputs={};streams={};debug_graphs={};debug_outputs={}
   def chain(variant,debug=False):

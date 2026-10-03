@@ -58,3 +58,18 @@ class ExpertPlanTests(unittest.TestCase):
                 for q,e in enumerate(x for row in ids for x in row):
                     self.assertEqual(ref['inverse'][q]>=0,e in selected)
                 self.assertEqual(sum(ref['valid_rows']),sum(n for e,n in enumerate(ref['counts']) if e in selected))
+
+    def test_large_chunks_have_unique_route_ownership_and_bounded_workspace(self):
+        from gaudi_kernels.serving.executor.grouped_moe_runtime import plan_for
+        for t in (512, 513, 1024, 2048, 4096):
+            ids = [[0,1,2,3,*[4+(i*4+j)%380 for j in range(4)]] for i in range(t)]
+            plan = plan_for(t)
+            self.assertTrue(plan.costs(t,8,384)['fits_budget'])
+            hits = [0]*(t*8)
+            for bucket in plan.buckets(t,8,384):
+                ref = reference_partition(ids,384,bucket)
+                self.assertEqual(ref['status'],[0])
+                for q,row in enumerate(ref['inverse']):
+                    hits[q] += row>=0
+                    if row>=0:self.assertEqual(ref['row_map'][row],q)
+            self.assertEqual(set(hits),{1})

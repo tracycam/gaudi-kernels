@@ -69,6 +69,8 @@ class MoEDispatch:
     # Explicit row set. The prior "max_rows=8" shorthand hid the B2
     # regression; compact-only B1/B8 has not passed a full-model gate yet.
     compact_rows: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8)
+    # Opt-in static shapes; per-expert ownership is determined on device.
+    grouped_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,10 @@ class EngineConfig:
             raise ConfigError('compact rows require qualified folded GP/vector down and rows <= 8')
         if compact not in ((), (1,), (1, 8), tuple(range(1, 9))):
             raise ConfigError('This migration admits only the implemented compact selector row sets')
+        grouped = d.moe.dispatch.grouped_rows
+        _rows(grouped, 'decode.moe.dispatch.grouped_rows', allow_empty=True)
+        if any(n not in (512, 513, 1024, 2048, 4096) for n in grouped):
+            raise ConfigError('Grouped MoE supports explicitly admitted large token shapes only')
         if not 1 <= self.runtime.flights <= 16:
             raise ConfigError('runtime.flights must be 1..16')
         _rows(self.runtime.buckets.batch, 'runtime.buckets.batch')

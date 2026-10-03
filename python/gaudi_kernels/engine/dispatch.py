@@ -46,7 +46,8 @@ class DispatchTable:
                 return Implementation('block_fp8.native_lanes.fp8_mme', 'block128_fp8')
             return Implementation('block_fp8.native_lanes.bf16_mme', 'bf16')
         if request.op == 'moe_dispatch':
-            name = 'compact' if request.rows in d.moe.dispatch.compact_rows else 'broadcast'
+            name = ('grouped' if request.rows in d.moe.dispatch.grouped_rows else
+                    'compact' if request.rows in d.moe.dispatch.compact_rows else 'broadcast')
             return Implementation('mxfp4.' + name, 'bf16')
         if request.op == 'moe_gate_up':
             return Implementation('mxfp4.' + d.moe.gate_up.impl, 'bf16')

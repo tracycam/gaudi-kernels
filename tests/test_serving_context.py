@@ -65,6 +65,26 @@ class ServingContextTests(unittest.TestCase):
             self.assertEqual(str(ctx.artifact('swa_bundle','tpc').path),binding['path'])
             self.assertFalse(ctx.has('absent'))
 
+    def test_moe_sidecars_are_pinned_and_colocated_before_loading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            document=self.document(folder)
+            for key,name in (('moe_bundle.tpc','bundle.so'),
+                             ('moe_batch_provider.host','provider_batch.so'),
+                             ('moe_expert_provider.host','provider_expert.so')):
+                path=Path(folder)/name;path.write_bytes(key.encode())
+                digest=hashlib.sha256(path.read_bytes()).hexdigest()
+                runtime.PINS[key]=digest
+                document['artifacts'][key]={'path':str(path),'sha256':digest}
+            missing=document['artifacts'].pop('moe_batch_provider.host')
+            with self.assertRaisesRegex(ConfigError,'provider'):
+                runtime.initialize(document,directory=folder)
+            document['artifacts']['moe_batch_provider.host']=missing
+            runtime.initialize(document,directory=folder)
+            runtime._CONTEXT=None
+            (Path(folder)/'provider_expert.so').write_bytes(b'tampered')
+            with self.assertRaisesRegex(ConfigError,'bytes changed'):
+                runtime.initialize(document,directory=folder)
+
     def test_missing_adapter_boundary_is_rejected_before_capture(self):
         from gaudi_kernels.serving.model_adapter import adapter_class
         with self.assertRaisesRegex(RuntimeError, 'position boundary'):

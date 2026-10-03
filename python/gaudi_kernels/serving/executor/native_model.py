@@ -22,18 +22,13 @@ class NativeExpertTP(torch.nn.Module):
         assert x.ndim == 2 and x.shape[-1] == 6144 and (topk_ids.ndim == 2)
         assert 1 <= topk_ids.shape[-1] <= 384 and topk_weights.shape == topk_ids.shape and (topk_ids.shape[0] == x.shape[0])
         assert activation == 'silu'
-        mode = 'auto'
-        if mode in ('auto', 'compact', 'broadcast', 'sorted'):
-            from gaudi_kernels.serving.executor.batch_ops import moe
-            from gaudi_kernels.serving.executor.moe_dispatch_runtime import select_mode
-            mode = select_mode(mode, x.shape[0])
-            mask = None
-            from gaudi_kernels.serving.diagnostics import boundary_hashes as boundary
-            if boundary.active():
-                output=moe(x, topk_ids, topk_weights, self.gp, self.gs, self.dp, self.ds, self.table, self.directions, mode=mode, route_mask=mask)
-                return boundary.emit(self._boundary_layer_index,'moe_local',output)
-            return moe(x, topk_ids, topk_weights, self.gp, self.gs, self.dp, self.ds, self.table, self.directions, mode=mode, route_mask=mask)
-        return native_ops.moe(x, topk_ids, topk_weights, self.gp, self.gs, self.dp, self.ds, self.table, self.directions)
+        from .moe_dispatch_runtime import forward
+        from gaudi_kernels.serving.diagnostics import boundary_hashes as boundary
+        output = forward(x, topk_ids, topk_weights, self.gp, self.gs,
+                         self.dp, self.ds, self.table, self.directions)
+        if boundary.active():
+            return boundary.emit(self._boundary_layer_index, 'moe_local', output)
+        return output
 
 
 def process_weights(self, layer):
