@@ -116,3 +116,34 @@ benefit and correct ownership, without reinstating obsolete FP64 gates.
 The grouped projection probe now admits MME M1..4096 and E1..384 with explicit
 memory bounds; TPC remains limited by the actual compiled specialization.
 Neither change installs a new production kernel or proves a performance gain.
+
+Module5 projection probes of the existing K8 BF16 decoder/MME path completed:
+
+| Projection | Active experts | M per expert | N / K | Median event us | Useful TFLOPS |
+|---|---:|---:|---|---:|---:|
+| GP | 3 | 3 | 512 / 6144 | 20.205 | 2.80 |
+| GP | 8 | 32 | 512 / 6144 | 36.148 | 44.56 |
+| GP | 8 | 1024 | 512 / 6144 | 133.128 | 387.14 |
+| Down | 8 | 1024 | 6144 / 256 | 130.679 | 197.20 |
+
+Each median is over five event sample means, not per-launch percentiles. All
+poisoned outputs and full numerical comparisons passed. These are synthetic
+finite normal-scale projections at actual TP-local dimensions, not full MoE,
+checkpoint quality, a newly optimized binary, or prefill/model speedups. The
+E8 cases rotate51MiB original weights; E3 rotates19.125MiB and is not a cold-HBM
+claim. M1024 here means1024 rows for EACH active expert; total prefill tokens
+must not be confused with this expert-local M.
+
+The E8 compiled graphs each contain four decoder/four MME nodes. All expanded
+weights reside in SRAM; address union is24MiB for GP and12MiB for down. This
+proves placement/coverage, not physical HBM transaction counts or engine overlap.
+Down materializes192MiB FP32 output per replay, against6.375MiB original
+weights/scales. Bounded down-to-combine consumption therefore belongs in the
+optimization scope; isolate physical stalls before calling it the sole bottleneck.
+
+The shared CPU MXFP8 quantizer matches the supplied local vLLM reference's
+codes/scales on five shapes through M1024 (reference SHA256
+`03a16184c905b3a5f0f4aa52736cefeb0528d97fa3d79a85da08d10b68b86c09`).
+122 CPU tests pass. FP8 MME scale streaming and runtime expert-M dispatch are
+still pending. Local source/binary/graph/output evidence is retained in
+`mxfp4-dual-path-20261003`; no production default has changed.

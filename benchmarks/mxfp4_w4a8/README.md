@@ -16,3 +16,17 @@ python3 benchmarks/mxfp4_w4a8/moe_accuracy.py \
 implementation-error threshold. The native E4M3 row-scale policy is a candidate,
 not an assertion of exact GPU-contract equivalence. No device performance or
 model quality acceptance follows from this CPU benchmark.
+
+The reusable CPU reference for ragged complete MoE is
+`gaudi_kernels.mxfp4_reference`. To compare its K32 quantizer against an explicit
+local GPU reference source without importing GPU runtime code:
+
+```sh
+PYTHONPATH=python python3 benchmarks/mxfp4_w4a8/check_quantizer_reference.py \
+  --vllm ../deps/vllm --out /tmp/mxfp8-reference-new.json
+```
+
+This check records source identity and compares FP8 bytes/E8M0 scales. It does
+not test native Gaudi FP8 representability, a device quantizer or performance.
+See [dual-path plan](../../docs/MXFP4_DUAL_PATH_PLAN.md) for the scale-streaming
+and full-chain work still required.
