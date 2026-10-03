@@ -15,7 +15,7 @@ benchmark or a general model-quality certification.
 | Fusion numerical check | 35 aligned full-logit queries bitwise equal; tested generated token sequences equal |
 | Multirow arithmetic vs prior policy | Maximum teacher-forced KL about 0.00422 (B2) and 0.00789 (B3); this comparison is not bitwise equality |
 | Native automatic startup | Two-layer TP8 check, 12 native steps per rank before benchmark enable RPC |
-| Full native MTP/DFlash cycle | Real eager functional cycle connected; corrected proposal alignment and full-cycle recording undergoing device tests; no qualified170 tokens/s result |
+| Full native MTP/DFlash cycle | Bounded complete-cycle recorder passed B1/B2/B3,T4/T8 and fixed-page comparisons; scheduler/HTTP admission incomplete, no qualified170 tokens/s result |
 
 Subsequent [packed target work](PACKED_TARGET_CHECKPOINT.md) passed actual
 two-layer mixed scheduling and70-layer native SWA, advancing target replay and
@@ -29,6 +29,10 @@ the earlier zero-acceptance smoke result is not a valid drafter assessment.
 The corrected real4K,T4 smoke emitted21 tokens in eight cycles (tau2.625), with
 all TP ranks agreeing. Eager cycle median345.76ms remains diagnostic overhead;
 there is still no native full-cycle service TPS result.
+Subsequent [complete-cycle recording and binding comparisons](NATIVE_SPECULATION_CHECKPOINT.md)
+passed on eight ranks. Removing changing-history binding construction improved
+the three-request,T8 diagnostic median78.79→58.69ms in one resident-process pair;
+single-request cycle timing did not improve. This is not a new serving TPS.
 
 The multi-request generation test used a private 4K code-review corpus, greedy
 sampling, and a 96-token output budget. The common decode window begins after

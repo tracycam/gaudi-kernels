@@ -1,7 +1,7 @@
 # Unified execution implementation plan
 
 Status: actual packed model/scheduler consumers and advancing70-layer target recorder
-tested; full-cycle recording in device qualification. See [current evidence and remaining work](PACKED_TARGET_CHECKPOINT.md).
+tested; bounded full-cycle recording and fixed-page comparisons passed. See [current evidence and remaining work](PACKED_TARGET_CHECKPOINT.md).
 Device/model completion is recorded separately.
 Baseline: public source commit `656b6f7`, development model baseline `a999894`.
 
@@ -28,8 +28,8 @@ remain outside plugin patches and outside public experiment payloads.
 | C1 | Packed TokenBatch, output ownership, capability/capacity checks, vLLM scheduler adapter | [1,4,128] occupies133 valid rows, ragged/reordered/page-boundary checks, no private model dimensions | Actual two-layer mixed scheduler consumption tested; default production admission pending |
 | C2 | KV view/write staging and explicit computed/committed/emitted results | No live KV overwrite, prefix-only commit, reject/abort/EOS/budget ownership, continued attention after rejection | Exclusive arena prefixes and ordinary allocator borrowing tested; speculative allocator promotion/COW/events pending |
 | C3 | Target-only mixed layer and model execution | Every request/query compared; padding excluded; regular and sliding-window causal visibility | 70-layer structural checks passed; historical floating thresholds reported separately; serving admission pending |
-| C4 | Native packed target runtime | Replay same capacity without request-ID recompilation, validate-before-mutation, partial failure invalidates plan, clean teardown | Advancing70-layer target recording tested; full-cycle/dynamic service qualification incomplete |
-| C5 | Complete NextN cycle, then DFlash using same target/KV interface | Actual accepted prefixes and full answers; all rejection paths; full-cycle TPS and conditional acceptance | 70-layer target features and real eager DFlash cycle connected; proposal alignment corrected; recording/quality/TPS pending |
+| C4 | Native packed target runtime | Replay same capacity without request-ID recompilation, validate-before-mutation, partial failure invalidates plan, clean teardown | Advancing70-layer target and bounded whole-cycle recording tested; dynamic serving/allocator admission incomplete |
+| C5 | Complete NextN cycle, then DFlash using same target/KV interface | Actual accepted prefixes and full answers; all rejection paths; full-cycle TPS and conditional acceptance | Corrected real DFlash cycles and complete recording tested across B1/B2/B3,T4/T8; NextN/full-answer quality/service TPS pending |
 | C6 | Expert-M dispatch, tiled KV reuse, fusion and explicit layer plans | Complete consuming-chain A/B, real route distributions, cold working set, physical traffic where observable | Not complete |
 | C7 | Public rebuild and HTTP service | Documented dependencies/artifact generation, pinned plugin interface, concurrency/cancellation/mixed arrival, resource plateau and exit | Not complete |
 
