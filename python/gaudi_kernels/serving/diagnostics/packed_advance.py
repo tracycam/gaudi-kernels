@@ -38,6 +38,9 @@ def on_worker(worker, native_swa=False):
     target = PackedTargetExecutor(runner, **options)
     target.session = BoundKVSession(target.session, (1, 4, 8), 32)
     reference = PackedTargetExecutor(runner, **options)
+    # Replay correctness compares the same program/extents with eager input
+    # updates. Different tile/addition trees belong to a precision comparison.
+    reference.session = BoundKVSession(reference.session, (1, 4, 8), 32)
     report = {'rank': worker.rank, 'pass': False, 'steps': [], 'source_captures': 1,
               'scope': 'advancing target recorder with exclusive KV; no sampler, complete MTP or TPS',
               'explicit_graph_producer': False, 'history_capacity_per_request': 32,
@@ -118,14 +121,17 @@ def on_worker(worker, native_swa=False):
                    'replay_code': code, 'replay_wall_ns': wall, 'enqueue_host_ns': times[0].value,
                    'addresses_stable': current == pointers, 'past_kv_bytes_unchanged': unchanged,
                    'checks': checks, 'hidden_relative_l2': (delta/expected['hidden'].float().norm()).item()}
-            row['pass'] = code == 0 and unchanged and current == pointers and all(c['pass'] for c in checks)
+            row['same_program_hidden_exact'] = torch.equal(actual['hidden'], expected['hidden'])
+            row['same_program_logits_exact'] = torch.equal(actual['logits'], expected['logits'])
+            row['pass'] = (code == 0 and unchanged and current == pointers and
+                           row['same_program_hidden_exact'] and row['same_program_logits_exact'])
             report['steps'].append(row)
             torch.save({'actual': actual, 'reference': expected}, root/f'rank{worker.rank}-step{step}.pt')
             if not vote(row['pass']):
                 raise RuntimeError('All-rank advancing target output/live-KV check failed')
             target.session.commit(metadata, commits)
             reference.commit(expected_result, commits)
-            if target.session.arena.committed != reference.session.committed:
+            if target.session.arena.committed != reference.session.arena.committed:
                 raise RuntimeError('Captured/reference accepted prefix slot maps differ')
         report['pass'] = True
     except BaseException as error:

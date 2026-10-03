@@ -25,6 +25,8 @@ def main():
                    help='Freeze operator input/output boundaries for serving-teacher diagnosis')
     p.add_argument('--native-packed-swa', action='store_true',
                    help='Use request-owned aligned pages and the pinned multi-query SWA kernel')
+    p.add_argument('--defer-precision-gate', action='store_true',
+                   help='Report floating regression thresholds without blocking finite/KV/causality functional diagnostics')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -46,6 +48,7 @@ def main():
     llm.collective_rpc('native_configure', args=(False, False, False, 'compact'))
     plan = {'cases': [{'name': 'ragged-small', 'rows': [1, 4, 8], 'starts': [127, 126, 0], 'commits': [1, 2, 8]}]}
     plan['native_swa'] = args.native_packed_swa
+    plan['defer_precision_gate'] = args.defer_precision_gate
     if args.trace_layers:
         if any(i < 0 or i >= args.layers for i in args.trace_layers) or not args.serving_teacher:
             raise ValueError('Boundary tracing requires valid decoder indices and serving teacher')
@@ -78,6 +81,7 @@ def main():
                               'query_tokens': [[row['token'] for row in values] for values in rows],
                               'serving_rows': [row for values in rows for row in values]})
     result = {'layers': args.layers, 'plan': plan, 'pass': False, 'status': 'RUNNING',
+              'precision_gate_deferred': args.defer_precision_gate,
               'scope': 'real weights; target-only; not full model quality or throughput'}
     try:
         result['ranks'] = llm.collective_rpc('packed_target_probe', args=(plan,))

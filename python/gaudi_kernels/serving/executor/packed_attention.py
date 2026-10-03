@@ -165,9 +165,14 @@ def forward_packed(impl, layer, query, key, value, metadata, output=None):
         # Reuse the qualified graph-owned reshape edge. A Lazy view alone is
         # not a sufficient storage boundary for the custom-operator bridge.
         owned_query = torch.ops.gaudi_swa128.reshape(query, [rows, 1, 3072])
+        # The qualified component probe contributes integer graph outputs,
+        # rather than using host-uploaded metadata as custom-kernel inputs.
+        # Keep that materialization boundary until a direct binding is proven.
+        pages = metadata.window_page_ids + 0
+        groups = metadata.window_page_groups + 0
+        positions = metadata.flat_query_positions + 0
         context = torch.ops.gaudi_swa128_batch.window_quad_fp32(owned_query,
-            key_cache, value_cache, metadata.window_page_ids, metadata.window_page_groups,
-            metadata.flat_query_positions, impl.sinks.contiguous(), impl.scale)
+            key_cache, value_cache, pages, groups, positions, impl.sinks.contiguous(), impl.scale)
         result = torch.ops.gaudi_swa128.reshape(context, [rows, 2048])
         if output is not None:
             output.copy_(result.reshape(output.shape))

@@ -187,11 +187,16 @@ def on_worker(worker, plan):
                         'continuation_reference_logits': expected_next_logits}, directory/(case['name']+'.pt'))
         report['cases'].append(row)
         (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
-    report['pass'] = all(c['all_query_pass'] and c['continuation_pass'] and c['every_shared_call_compact']
+    report['arithmetic_gate_pass'] = all(c['all_query_pass'] and c['continuation_pass'] and
+                                       c.get('serving_teacher_pass', True) for c in report['cases'])
+    report['precision_gate_deferred'] = bool(plan.get('defer_precision_gate'))
+    report['functional_pass'] = all(c['every_shared_call_compact']
                          and c['future_request_isolation_exact']
                          and c['commit_slot_coverage_exact']
                          and c['live_history_bytes_unchanged']
-                         and c.get('serving_teacher_pass', True)
+                         and all(check['finite'] for check in (*c['checks'], *c['continuation_checks'],
+                                                              *c.get('serving_teacher_checks', ())))
                          for c in report['cases'])
+    report['pass'] = report['functional_pass'] and (report['arithmetic_gate_pass'] or report['precision_gate_deferred'])
     (directory/f'rank{worker.rank}.json').write_text(json.dumps(report, indent=2)+'\n')
     return report
