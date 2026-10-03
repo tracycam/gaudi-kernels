@@ -90,6 +90,8 @@ def analyze(path, replays):
         bins[label] = {'average_count_per_replay': len(values)/replays,
                        'average_total_ms_per_replay': sum(values)/replays/1000}
     return {'source': str(path), 'captured_replays': replays,
+            'engines_without_execution_events': [engine for engine, values in intervals.items() if not values],
+            'missing_execution_warning': 'Metadata without execution events does not establish zero engine activity. Idle values refer only to observed engines.',
             'paired_intervals': {engine: len(values) for engine, values in intervals.items()},
             'compute_gap_bins': bins,
             'compute_edge_idle_ms_per_replay': (end-begin-compute_busy-sum(gaps))/replays/1000,

@@ -39,6 +39,8 @@ class DeviceTraceTests(unittest.TestCase):
 
     def test_gap_accounting_includes_compute_edges(self):
         result = self.check(self.fixture())
+        self.assertIn('NIC Internal', result['engines_without_execution_events'])
+        self.assertNotIn('TPC', result['engines_without_execution_events'])
         idle = sum(row['average_total_ms_per_replay'] for row in result['compute_gap_bins'].values())
         idle += result['compute_edge_idle_ms_per_replay']
         self.assertEqual(idle, result['average_per_replay_ms']['compute_idle'])
