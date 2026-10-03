@@ -24,9 +24,9 @@ class LayerSpec:
     def __post_init__(self):
         if (any(type(v) is not int or v < 1 for v in
                 (self.hidden_size, self.query_heads, self.kv_heads, self.head_dim)) or
-                self.hidden_size != self.query_heads * self.head_dim or
                 self.query_heads % self.kv_heads or
                 type(self.sliding_window) is not int or self.sliding_window < 0 or
+                type(self.epsilon) not in (int, float) or
                 not math.isfinite(self.epsilon) or self.epsilon <= 0):
             raise ValueError('Unsupported reference layer geometry')
 
@@ -67,7 +67,7 @@ def _attention(q, key, value, positions, key_start, spec):
     scores = scores.masked_fill(~allowed.unsqueeze(0), float('-inf'))
     probabilities = torch.softmax(scores, dim=-1)
     result = torch.matmul(probabilities, value.transpose(0, 1).float())
-    return result.transpose(0, 1).reshape(q.shape[0], spec.hidden_size).to(q.dtype)
+    return result.transpose(0, 1).reshape(q.shape[0], spec.query_heads * spec.head_dim).to(q.dtype)
 
 
 def _validate(batch, hidden, norm_weight, qkv_weight, out_weight, histories, spec):
@@ -77,7 +77,7 @@ def _validate(batch, hidden, norm_weight, qkv_weight, out_weight, histories, spe
     if (hidden.ndim != 2 or hidden.shape != (batch.capacity.token_rows, spec.hidden_size) or
             norm_weight.shape != (spec.hidden_size,) or
             qkv_weight.shape != (qkv_size, spec.hidden_size) or
-            out_weight.shape != (spec.hidden_size, spec.hidden_size) or
+            out_weight.shape != (spec.hidden_size, spec.query_heads * spec.head_dim) or
             len(histories) != len(batch.requests)):
         raise ValueError('Invalid reference layer inputs')
     if any(t.device != hidden.device or t.dtype != hidden.dtype
@@ -131,10 +131,10 @@ def sequential_target(batch, hidden, norm_weight, qkv_weight, out_weight, histor
                         {'qkv': batch.num_tokens, 'out': batch.num_tokens})
 
 
-def fixture(*, device='cpu', sliding_window=0):
+def fixture(*, device='cpu', sliding_window=0, hidden_size=32):
     from gaudi_kernels.engine.token_batch import BatchCapacity, RequestTokens
     generator = torch.Generator().manual_seed(37)
-    spec = LayerSpec(32, 4, 2, 8, sliding_window)
+    spec = LayerSpec(hidden_size, 4, 2, 8, sliding_window)
     batch = TokenBatch((RequestTokens('decode', (11,), 127, 'decode'),
                         RequestTokens('verify', (21, 22, 23, 24), 126, 'verify'),
                         RequestTokens('prefill', tuple(range(128)), 0, 'prefill')),
@@ -143,10 +143,10 @@ def fixture(*, device='cpu', sliding_window=0):
     def tensor(shape, scale=1):
         return (torch.randn(shape, generator=generator) * scale).bfloat16().to(device)
 
-    hidden = tensor((144, 32))
-    norm = torch.ones(32, dtype=torch.bfloat16, device=device)
-    qkv = tensor((64, 32), .1)
-    out = tensor((32, 32), .1)
+    hidden = tensor((144, hidden_size))
+    norm = torch.ones(hidden_size, dtype=torch.bfloat16, device=device)
+    qkv = tensor((64, hidden_size), .1)
+    out = tensor((hidden_size, 32), .1)
     histories = tuple((tensor((r.start_position, 2, 8)), tensor((r.start_position, 2, 8)))
                       for r in batch.requests)
     return batch, hidden, norm, qkv, out, histories, spec

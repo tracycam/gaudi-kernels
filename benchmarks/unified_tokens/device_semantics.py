@@ -19,9 +19,9 @@ def main():
               'cases': [], 'pass': False}
     try:
         with torch.inference_mode():
-            for window in (0, 128):
-                cpu = fixture(sliding_window=window)
-                device = fixture(device='hpu', sliding_window=window)
+            for width, window in ((32, 0), (32, 128), (48, 0), (48, 128)):
+                cpu = fixture(sliding_window=window, hidden_size=width)
+                device = fixture(device='hpu', sliding_window=window, hidden_size=width)
                 batch, hidden, norm, qkv, out, histories, spec = device
                 expected = sequential_target(*cpu).hidden.float()
                 actual = packed_target(*device)
@@ -54,7 +54,8 @@ def main():
                     torch.testing.assert_close(following.hidden.cpu().float(), reference.hidden.float(),
                                                rtol=.03, atol=.03)
                     commits.append({'committed_input_queries': count, 'continued_decode_checked': True})
-                record = {'sliding_window': window, 'valid_rows': batch.num_tokens,
+                record = {'sliding_window': window, 'hidden_size': width, 'attention_size': 32,
+                          'valid_rows': batch.num_tokens,
                           'capacity_rows': batch.capacity.token_rows,
                           'query_lengths': batch.query_lengths, 'query_start_loc': batch.query_start_loc,
                           'relative_l2': relative_l2, 'max_absolute': float(delta.abs().max()),
@@ -62,7 +63,7 @@ def main():
                           'future_query_isolation': True, 'nan_padding_excluded': True, 'commit_cases': commits}
                 result['cases'].append(record)
                 torch.save({'expected': expected, 'actual': value, 'mutated': mutated_value},
-                           root / f'window-{window}.pt')
+                           root / f'width-{width}-window-{window}.pt')
                 (root / 'semantic-result.json').write_text(json.dumps(result, indent=2) + '\n')
             result['pass'] = True
     except BaseException as error:

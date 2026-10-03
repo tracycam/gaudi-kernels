@@ -5,6 +5,12 @@ from gaudi_kernels.serving.executor.target_reference import fixture, packed_targ
 
 
 class PackedTargetTests(unittest.TestCase):
+    def test_hidden_width_is_independent_of_attention_width(self):
+        args = fixture(hidden_size=48)
+        actual, expected = packed_target(*args), sequential_target(*args)
+        self.assertEqual(actual.hidden.shape, (133, 48))
+        torch.testing.assert_close(actual.hidden.float(), expected.hidden.float(), rtol=.02, atol=.02)
+
     def test_full_and_swa_mixed_forward_match_independent_token_reference(self):
         for window in (0, 128):
             args = fixture(sliding_window=window)
