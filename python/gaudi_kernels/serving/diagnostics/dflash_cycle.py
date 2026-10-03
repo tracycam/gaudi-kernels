@@ -101,6 +101,7 @@ def _on_worker(worker, plan):
               'static_page_bindings': target.session.static_pages,
               'fold_gqa_heads': draft.fold_gqa,
               'compact_row_diagnostic': plan.get('compact_row_diagnostic', False),
+              'start_alignment': 'CPU diagnostic vote after full live-KV snapshot, outside narrow cycle timer',
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     recorded = bool(plan.get('record_cycle', False))
@@ -116,9 +117,15 @@ def _on_worker(worker, plan):
         for step in range(cycles):
             starts = tuple(len(arena.committed[rid]) for rid in ids)
             schedule = QueryBatch(tuple(RequestQueries(rid, extent, start, 'verify') for rid, start in zip(ids, starts)))
+            audit_begin = time.perf_counter_ns()
             before = {name: tuple(t.index_select(0, torch.tensor(
                         tuple(s for slots in arena.committed.values() for s in slots), device=runner.device)).cpu().clone()
                         for t in tensors) for name, tensors in arena.caches.items()}
+            snapshot_end = time.perf_counter_ns()
+            # Full-KV D2H audits are intentionally outside the narrow replay
+            # timer. Without alignment, a fast rank measures waits for a peer's
+            # diagnostic copies as if they were model/collective execution.
+            vote(True)
             began = time.perf_counter_ns()
             metadata = target.session.prepare(schedule)
             prepared_at = time.perf_counter_ns()
@@ -148,6 +155,7 @@ def _on_worker(worker, plan):
             unchanged = all(torch.equal(saved.contiguous().view(torch.uint8),
                 tensor.index_select(0, index).cpu().contiguous().view(torch.uint8))
                 for name, tensors in arena.caches.items() for saved, tensor in zip(before[name], tensors))
+            post_snapshot_end = time.perf_counter_ns()
             record = {'step': step, 'starts': starts, 'emitted': emitted,
                       'execution': execution,
                       # These readbacks are outside the measured device chain,
@@ -158,6 +166,9 @@ def _on_worker(worker, plan):
                       'emitted_ids': [list(row.emitted_tokens) for row in output.requests],
                       'matched_drafts': result.verification.matched_draft_counts.cpu().tolist(),
                       'eager_cycle_wall_ns': elapsed, 'old_target_kv_bytes_unchanged': unchanged,
+                      'pre_cycle_kv_audit_wall_ns': snapshot_end-audit_begin,
+                      'diagnostic_start_alignment_wall_ns': began-snapshot_end,
+                      'post_cycle_kv_audit_wall_ns': post_snapshot_end-delivered_at,
                       'prepare_wall_ns': prepared_at-began,
                       'execute_wall_ns': executed_at-prepared_at,
                       'delivery_wall_ns': delivered_at-executed_at,
