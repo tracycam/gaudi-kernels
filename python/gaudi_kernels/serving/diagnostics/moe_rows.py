@@ -17,6 +17,7 @@ def on_worker(worker, plan):
     from gaudi_kernels.serving.executor.gp_scale_tail_runtime import operator
     from gaudi_kernels.serving.executor.precision_ops import combine
     from gaudi_kernels.serving.executor.packing import unpack, unpack_acc32_lanes
+    from gaudi_kernels.serving.diagnostics.fp32_reference import dot_error_bound
 
     rows = tuple(plan['rows'])
     if (worker.model_runner.input_batch.num_reqs or context().native.active or
@@ -109,6 +110,7 @@ def on_worker(worker, plan):
                     scale = torch.pow(2.,torch.from_numpy(scales)[columns].float()-127).repeat_interleave(32,-1)
                     decoded = lut[code]*scale
                     fp32 = decoded @ x_cpu[0].float()
+                    bound = dot_error_bound(decoded*x_cpu[0].float())
                     raw_partial = cpu['compact'][2].reshape(n,8,3,512)[0,0]
                     actual = torch.from_numpy(unpack_acc32_lanes(raw_partial.numpy())).sum(0)[columns]
                     # A separately materialized GP tests whether a graph's
@@ -127,7 +129,12 @@ def on_worker(worker, plan):
                         relative_l2=float((actual-fp32).norm()/fp32.norm().clamp_min(1e-30)),
                         standalone_relative_l2=float((solo_cpu-fp32).norm()/fp32.norm().clamp_min(1e-30)),
                         graph_standalone_bits_equal=same(actual,solo_cpu),
+                        fp32_forward_bound_pass=bool(((actual-fp32).abs()<=bound).all() and
+                                                     ((solo_cpu-fp32).abs()<=bound).all()),
                         scope='Independent FP32 dot products; legal accumulation-tree differences reported, precision threshold deferred'))
+                    save()
+                    if not report['fp32_samples'][-1]['fp32_forward_bound_pass']:
+                        raise ValueError('GP error exceeds both FP32 accumulation trees: inspect indexing/layout/scales')
                 check = dict(rows=n,state=state,finite=finite,production_bits_equal=equal,metamorphic_pass=metamorphic)
                 report['checks'].append(check)
                 torch.save(dict(inputs=raw,outputs=cpu),root/f'rank{worker.rank}-r{n}-{state}.pt')
