@@ -28,6 +28,9 @@ class PackedDiffKVBackend(HPUAttentionDiffKVBackend):
         return PackedDiffKVImpl
 
 
+QUALIFIED_PACKED_FORWARD = PackedDiffKVImpl.forward
+
+
 class PackedFlashDiffKVBackend(PackedDiffKVBackend):
     @staticmethod
     def is_supported_on_current_device(**kwargs):

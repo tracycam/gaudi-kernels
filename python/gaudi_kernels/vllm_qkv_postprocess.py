@@ -167,7 +167,11 @@ def _static_reason(module):
     if not getattr(attn,'use_direct_call',False):return 'attention_indirect_call'
     if getattr(attn,'query_quant',None) is not None:return 'query_quantization'
     impl=getattr(attn,'impl',None)
-    if type(impl) not in (_IMPL,_DIFF_IMPL):return 'attention_impl_class'
+    packed_backend=sys.modules.get('gaudi_kernels.serving.packed_backend')
+    packed_impl=getattr(packed_backend,'PackedDiffKVImpl',None)
+    if type(impl) not in (_IMPL,_DIFF_IMPL,packed_impl):return 'attention_impl_class'
+    if type(impl) is packed_impl and ('forward' in impl.__dict__ or
+            packed_impl.forward is not packed_backend.QUALIFIED_PACKED_FORWARD):return 'packed_forward_override'
     if type(impl) is _DIFF_IMPL and _DIFF_IMPL.forward is not _IMPL.forward:return 'diffkv_forward_override'
     window=getattr(impl,'sliding_window','missing')
     if window!=128 and not (_ATTENTION_SCOPE=='swa128_or_full' and window is None):return 'attention_sliding_window'
