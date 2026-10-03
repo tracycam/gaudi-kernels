@@ -80,3 +80,50 @@ Every followup separates functional correctness, precision measurements and
 performance. Original checkpoint storage width/block scales remain unchanged.
 Source archives, failures, successful runs, private inputs and full witnesses
 are retained locally; source-only changes stay on the public feature branch.
+
+## Device body and row coverage followup
+
+Direct Synapse captures now contain physical TPC/MME/DMA execution events for
+an actual completed70-layer DFlash cycle. NIC has metadata only: its activity
+is **unobserved**, not zero. Engine occupancy is unioned across cores/lanes.
+Reused DMA context IDs and differing begin/end SP categories are handled by
+queue-order descriptor pairing. Operator-family unions can overlap; do not
+sum them into wall time.
+
+For B1,T8, the broadcast-GQA capture spans26.98ms: TPC14.75ms, MME3.36ms,
+compute union17.83ms and compute gaps9.15ms. GP5.33ms and down3.36ms are the
+largest TPC families. B3,T8 spans57.61ms: compute union41.35ms and gaps16.27ms.
+The old broadcast MoE `nm_gemv` family occupies22.60ms; block-FP8 decoding
+occupies2.92ms. Profiling is intrusive and these windows are not service TPS.
+
+The exact loaded GP ELF/.text hashes were checked against the qualified pins,
+then disassembled with the TPC triple. Its K32 hardware-loop body contains248
+logical VLIW packets,215 occupied VPU slots,128 BF16 FP32-accumulating MACs,
+eight FP32 scale MACs and32 activation shuffles. The four accumulator chains
+recur at six-packet distance. Embedded C source/basic-block labels are stale
+after previous manual ISA edits; optimization must use the actual binary.
+
+Folding GQA query heads into M is functionally sound on the tested cohorts:
+all eight ranks' proposals, target-next IDs, emitted IDs and accepted lengths
+match the broadcast version. It is kept explicit/experimental. The median of
+the **maximum rank duration per synchronized step** was40.56→41.01ms for B1
+and77.26→83.37ms for B3. Rank0 alone misleadingly suggested a gain; neither
+cohort timing nor physical compute unions establishes one.
+
+Unchanged compact GP/gate/vector-down/combine ELFs were tested directly on
+loaded two-layer model expert weights at8/12/16/24 rows, on all eight ranks.
+All128 state checks passed final-consumer equality, finite arithmetic, row
+permutation and zero routing. Complete-chain ABBA favors12 rows slightly;
+16 is roughly tied and24 loses. Only12 rows is admitted to a **scoped private
+cycle experiment**; production configuration and automatic serving row sets
+remain restricted to the prior qualified rows.
+
+The independent GP reference initially exposed a reference-layout mistake.
+Each128 FP32 partial words stores even64 BF16 lanes followed by odd64; gate
+consumers already decode this ABI. A row-major comparison without that
+permutation produced a false large-error finding. Separately materialized GP
+and graph GP match bytewise; correcting the reference layout gives maximum
+relative L2 about9.35e-8 over512 columns on all ranks. No MAC or precision
+change was required. Original evidence and the corrected interpretation are
+both retained. Legal FP32 addition-tree rounding remains accepted; precision
+selection is deferred as instructed.
