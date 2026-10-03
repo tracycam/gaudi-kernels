@@ -15,6 +15,8 @@ def main():
                    help='Also compare packed multi-position logits against ordinary vLLM serving')
     p.add_argument('--scheduled-serving', action='store_true',
                    help='Also run the experimental compact consumer of actual scheduling and allocator KV')
+    p.add_argument('--static-replay', action='store_true',
+                   help='Probe same-address recorded target replay; not explicit graph construction or throughput')
     args = p.parse_args()
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
@@ -72,6 +74,10 @@ def main():
         if args.scheduled_serving:
             from tools.validation.executor.packed_serving_check import run
             result['scheduled_serving'] = run(llm, args.out)
+        if args.static_replay:
+            result['static_replay'] = llm.collective_rpc('packed_static_replay_probe')
+            if len(result['static_replay']) != 8 or not all(rank['pass'] for rank in result['static_replay']):
+                raise RuntimeError('Packed same-address recorded replay failed')
         result.update({'pass': True, 'status': 'COMPLETE'})
     except BaseException as error:
         result.update({'status': 'FAILED', 'error': repr(error), 'pass': False})
