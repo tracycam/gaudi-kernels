@@ -85,6 +85,11 @@ def on_worker(worker, plan):
               'feature_layers': draft.spec.target_layers, 'context_lengths': [len(row) for row in prompts],
               'scope': 'actual checkpoint eager functional cycles with private KV; no native/HTTP TPS or answer-quality claim'}
     recorded = bool(plan.get('record_cycle', False))
+    routes = None
+    if plan.get('routes', False):
+        from gaudi_kernels.serving.diagnostics.route_distribution import RouteDistribution
+        routes = RouteDistribution(target.model)
+        report['intrusive_route_snapshots'] = True
     recorder, binding = None, None
     if recorded and cycles < 3:
         raise ValueError('Recorded cycle needs eager warmup, capture and at least one replay')
@@ -142,6 +147,8 @@ def on_worker(worker, plan):
             record['pass'] = (unchanged and record['finite'] and all(1 <= n <= extent for n in emitted) and
                               record['committed_context_positions_correct'] and
                               all(len(arena.committed[rid]) == start+n for rid, start, n in zip(ids, starts, emitted)))
+            if routes is not None:
+                record['route_distribution'] = routes.summarize(schedule)
             report['cycles'].append(record)
             if not record['pass']:
                 raise RuntimeError('DFlash cycle finite/live-KV/input-commit check failed')
@@ -152,6 +159,8 @@ def on_worker(worker, plan):
         report['error'] = repr(error)
         raise
     finally:
+        if routes is not None:
+            routes.close()
         if recorder is not None:
             report['release_code'] = recorder.release()
             if report['release_code']:

@@ -41,6 +41,8 @@ def main():
                    help='Reuse one resident target to diagnose these independent request counts')
     p.add_argument('--cycle-row-sweep', nargs='+', type=int, choices=tuple(range(2, 9)),
                    help='Reuse one resident target to diagnose these target verify extents')
+    p.add_argument('--cycle-routes', action='store_true',
+                   help='Intrusively snapshot actual MoE route IDs; this run cannot establish service TPS')
     args = p.parse_args()
     if args.dflash_cycle and (args.layers != 70 or args.cycle_prompts is None):
         p.error('Real DFlash cycle requires70 target layers and explicit prompt fixtures')
@@ -137,7 +139,7 @@ def main():
                     cycle_plan = {'prompt_ids': [p['prompt_token_ids'] for p in prompts[:batch]],
                                   'draft_checkpoint': str(Path(args.model)/'dflash'), 'native_swa': args.native_packed_swa,
                                   'cycles': args.cycle_steps, 'verify_rows': extent,
-                                  'record_cycle': args.record_dflash_cycle,
+                                  'record_cycle': args.record_dflash_cycle, 'routes': args.cycle_routes,
                                   'label': f'dflash-b{batch}-t{extent}' if sweep else 'dflash-target-cycle'}
                     ranks = llm.collective_rpc('dflash_cycle_probe', args=(cycle_plan,))
                     emitted = [[c['emitted_ids'] for c in rank['cycles']] for rank in ranks]
