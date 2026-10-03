@@ -22,6 +22,8 @@ Meta decode_meta(const at::Stack&s){devices(s);auto w=s[0].toTensor(),sc=s[1].to
  auto k=s[4].toInt(),n=s[5].toInt(),nt=s[6].toInt(),slot=s[7].toInt(),batch=s[8].toInt(),nb=s[9].toInt(),mode=s[10].toInt();
  TORCH_CHECK(((k==6144&&n==512)||(k==256&&n==6144))&&nt>=512&&nt%512==0&&nb>=0&&nb%512==0&&nb+nt<=n&&slot>=0&&batch>=1&&slot+batch<=map.size(1)&&map.size(0)==1&&batch<=16&&batch*k*nt*2<=16*1024*1024&&mode>=0&&mode<=2,"expert decoder tile contract");
  TORCH_CHECK(w.size(1)==256&&sc.size(1)==512&&w.size(0)%((n/512)*k)==0&&w.size(0)/((n/512)*k)<=384&&sc.size(0)*32==w.size(0)&&lut.size(0)==1&&lut.size(1)==512,"HistoricalN512 owner contract");return {{at::kBFloat16,{batch,k,nt}}};}
+Meta queue_meta(const at::Stack&s){devices(s);auto ids=s[0].toTensor();tensor(ids,at::kInt,2);TORCH_CHECK(ids.size(0)<=513&&ids.size(1)<=8,"bounded route queue");return{{at::kInt,{ids.numel()*3}},{at::kInt,{ids.numel()*12}}};}
+Meta queue_gemv_meta(const at::Stack&s){devices(s);auto w=s[0].toTensor(),sc=s[1].toTensor(),x=s[2].toTensor(),lut=s[3].toTensor(),map=s[4].toTensor(),q=s[5].toTensor();tensor(w,at::kByte,2);tensor(sc,at::kByte,2);tensor(x,at::kBFloat16,2);tensor(lut,at::kBFloat16,2);tensor(map,at::kInt,2);tensor(q,at::kInt,1);TORCH_CHECK((x.size(1)==2048||x.size(1)==256)&&w.size(1)==256&&sc.size(1)==512&&w.size(0)==sc.size(0)*32&&lut.size(0)==1&&lut.size(1)==512&&map.size(0)==1&&map.size(1)==x.size(0)&&q.numel()==x.size(0),"queued masked GEMV geometry");return{{at::kFloat,{1,x.size(0)*512}}};}
 using Fn=Meta(*)(const at::Stack&);
 V run(const char*name,Fn fn,const at::Stack&s){auto m=fn(s);if(s[0].toTensor().device().type()==at::kMeta){V v;for(auto&o:m)v.push_back(at::empty(o.shape,s[0].toTensor().options().dtype(o.dtype)));return v;}auto op=habana::custom_op::UserCustomOpDescriptor::getUserCustomOpDescriptor(name);return op.execute(s);}
 std::shared_ptr<void> params(const at::Stack&s,size_t&n,int first,int count){n=count*4;auto p=std::shared_ptr<int[]>(new int[count]);for(int i=0;i<count;++i)p[i]=s[first+i].toInt();return std::shared_ptr<void>(p,p.get());}
@@ -32,8 +34,12 @@ T gather(T x,T map,T st,int64_t r,int64_t c,int64_t slot,int64_t b){return run("
 T gate(T p,T v,T st,int64_t slot){return run("gaudi_expert_partition::gate",gate_meta,{p,v,st,slot})[0];}
 T combine(T p,T r,T inv,T st){return run("gaudi_expert_partition::combine",combine_meta,{p,r,inv,st})[0];}
 T decode(T w,T sc,T lut,T map,int64_t k,int64_t n,int64_t nt,int64_t slot,int64_t batch,int64_t nb,int64_t mode){return run("gaudi_expert_partition::decode",decode_meta,{w,sc,lut,map,k,n,nt,slot,batch,nb,mode})[0];}
+auto queue(T ids){auto v=run("gaudi_expert_partition::queue",queue_meta,{ids});return std::make_tuple(v[0],v[1]);}
+T queue_gemv(T w,T sc,T x,T lut,T map,T q){return run("gaudi_expert_partition::queue_gemv",queue_gemv_meta,{w,sc,x,lut,map,q})[0];}
 }
 TORCH_LIBRARY(gaudi_expert_partition,m){
+ m.def("queue(Tensor ids) -> (Tensor,Tensor)");
+ m.def("queue_gemv(Tensor packed, Tensor scales, Tensor x, Tensor lut, Tensor mapping, Tensor order) -> Tensor");
  m.def("decode(Tensor packed, Tensor scales, Tensor lut, Tensor expert_map, int k, int n, int n_tile, int slot_begin, int batch, int n_begin, int empty_mode) -> Tensor");
  m.def("prefix(Tensor counts, Tensor flags, int routes, int rows, int slots, int lower, int upper, int overflow_to_tpc) -> (Tensor,Tensor,Tensor,Tensor,Tensor)");
  m.def("inverse(Tensor ids, Tensor flat_ids, Tensor prefix, Tensor status, Tensor offsets, int rows, int slots) -> Tensor");
@@ -41,6 +47,8 @@ TORCH_LIBRARY(gaudi_expert_partition,m){
  m.def("gather(Tensor x, Tensor row_map, Tensor status, int routes, int rows, int slot, int batch) -> Tensor");
  m.def("gate(Tensor partial, Tensor valid_rows, Tensor status, int slot) -> Tensor");
  m.def("combine(Tensor partial, Tensor routing, Tensor inverse, Tensor status) -> Tensor");
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::queue","gk_expert_queue",queue_meta,[](const at::Stack&,size_t&n)->std::shared_ptr<void>{n=0;return nullptr;});
+ habana::custom_op::registerUserCustomOp("gaudi_expert_partition::queue_gemv","gk_expert_queue_gemv",queue_gemv_meta,[](const at::Stack&,size_t&n)->std::shared_ptr<void>{n=0;return nullptr;});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::decode","gk_expert_decode_k8",decode_meta,[](const at::Stack&s,size_t&n){n=16;auto p=std::shared_ptr<int[]>(new int[4]);p[0]=s[5].toInt()/512;p[1]=s[7].toInt();p[2]=s[9].toInt()/512;p[3]=s[10].toInt();return std::shared_ptr<void>(p,p.get());});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::prefix","gk_expert_prefix",prefix_meta,[](const at::Stack&s,size_t&n){return params(s,n,2,6);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::inverse","gk_expert_inverse",inverse_meta,[](const at::Stack&s,size_t&n){return params(s,n,5,2);});
@@ -49,6 +57,6 @@ TORCH_LIBRARY(gaudi_expert_partition,m){
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::gate","gk_expert_gate",gate_meta,[](const at::Stack&s,size_t&n){return params(s,n,3,1);});
  habana::custom_op::registerUserCustomOp("gaudi_expert_partition::combine","gk_expert_combine",combine_meta,[](const at::Stack&,size_t&n)->std::shared_ptr<void>{n=0;return nullptr;});
 }
-#define GK_EXPERT_PARTITION_IMPL m.impl("decode",decode);m.impl("prefix",prefix);m.impl("inverse",inverse);m.impl("row_map",row_map);m.impl("gather",gather);m.impl("gate",gate);m.impl("combine",combine);
+#define GK_EXPERT_PARTITION_IMPL m.impl("queue",queue);m.impl("queue_gemv",queue_gemv);m.impl("decode",decode);m.impl("prefix",prefix);m.impl("inverse",inverse);m.impl("row_map",row_map);m.impl("gather",gather);m.impl("gate",gate);m.impl("combine",combine);
 TORCH_LIBRARY_IMPL(gaudi_expert_partition,HPU,m){GK_EXPERT_PARTITION_IMPL}
 TORCH_LIBRARY_IMPL(gaudi_expert_partition,Meta,m){GK_EXPERT_PARTITION_IMPL}

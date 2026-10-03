@@ -8,7 +8,7 @@ import torch
 from .moe_expert_plan import ExpertPlan
 
 
-def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="historical", empty_mode=0):
+def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="historical", empty_mode=0, tpc_schedule="contiguous"):
     if type(plan) is not ExpertPlan or x.ndim != 2 or ids.ndim != 2:
         raise ValueError('explicit expert plan and token/route matrices required')
     t,r=ids.shape
@@ -24,6 +24,8 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
                 or value.device.type not in ('hpu','meta') or not value.is_contiguous()
                 or value.requires_grad):
             raise ValueError('expert-M weight/activation/layout contract')
+    if tpc_schedule not in ('contiguous','queue'):
+        raise ValueError('explicit TPC schedule required')
     if decoder not in ('historical','k8') or type(empty_mode) is not int or empty_mode not in (0,1,2):
         raise ValueError('explicit decoder and empty slot policy required')
     if decoder=='historical' and empty_mode:
@@ -55,7 +57,18 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
         selected=buckets[0][4]>=0
         for item in buckets[1:]:selected=selected|(item[4]>=0)
         small=(~selected.reshape(ids.shape))&(buckets[0][3]==0)
-        result=tpc(x,ids,routing,gp,gs,down,ds,lut,directions,route_mask=small)
+        if tpc_schedule=='contiguous':
+            result=tpc(x,ids,routing,gp,gs,down,ds,lut,directions,route_mask=small)
+        else:
+            masked_ids=torch.where(small,ids,torch.full_like(ids,-1)).clone()
+            masked_routing=torch.where(small,routing,torch.zeros_like(routing)).clone()
+            gp_queue,down_queue=op.queue(masked_ids)
+            ax,mapping=torch.ops.native_mxfp4.prep(x.clone(),masked_ids,1,3,r)
+            p=op.queue_gemv(gp,gs,ax,lut,mapping,gp_queue)
+            gate,mapping=torch.ops.unified_batch.gate_broadcast(p,masked_ids)
+            p=op.queue_gemv(down,ds,gate,lut,mapping,down_queue)
+            # Same frozen FP32 combine and historical lane restoration as tpc.
+            result=torch.ops.precision_fix.combine(p,masked_routing,directions,6144)
     def decode(w,s,k,n,nt,slot,batch,nb,ids_view):
         if decoder=='historical':return core.decode(w,s,lut,ids_view,k,n,nt,slot,batch,nb,1)
         return op.decode(w,s,lut,ids_view,k,n,nt,slot,batch,nb,empty_mode)

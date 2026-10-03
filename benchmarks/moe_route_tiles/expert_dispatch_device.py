@@ -9,6 +9,7 @@ p=argparse.ArgumentParser()
 p.add_argument('--tokens',type=int,choices=(8,32,128,512,513),required=True)
 p.add_argument('--thresholds',type=int,nargs='+',default=[64])
 p.add_argument('--partition-library',type=Path,required=True)
+p.add_argument('--tpc-schedule',choices=('contiguous','queue'),default='contiguous')
 p.add_argument('--max-slots',type=int,default=0)
 p.add_argument('--row-caps',type=int,nargs='*',default=[])
 p.add_argument('--decoder',choices=('historical','k8'),default='historical')
@@ -73,7 +74,7 @@ try:
    x=owners['x'].clone();ids=owners['ids'].int().clone();routing=owners['routing'].float().clone()
    args=(x,ids,routing,owners['gp'],owners['gs'],owners['dp'],owners['ds'],owners['table'],owners['directions'])
    if variant=='broadcast':y=batch_ops.moe(*args,mode='broadcast');return y,y+.03125
-   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug,decoder=a.decoder,empty_mode=a.empty_mode)
+   value=expert_moe(*args,plan=plans[variant],tpc=batch_ops.moe,debug=debug,decoder=a.decoder,empty_mode=a.empty_mode,tpc_schedule=a.tpc_schedule)
    return value if debug else (value,value+.03125)
   for variant in variants:
    graph,stream=torch.hpu.HPUGraph(),torch.hpu.Stream()
