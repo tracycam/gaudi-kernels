@@ -43,6 +43,8 @@ def main():
                    help='Reuse one resident target to diagnose these independent request counts')
     p.add_argument('--cycle-row-sweep', nargs='+', type=int, choices=tuple(range(2, 9)),
                    help='Reuse one resident target to diagnose these target verify extents')
+    p.add_argument('--cycle-cohorts', nargs='+', choices=('1x8','2x4','3x4'),
+                   help='Explicit request/query cohorts without a Cartesian shape sweep')
     p.add_argument('--cycle-routes', action='store_true',
                    help='Intrusively snapshot actual MoE route IDs; this run cannot establish service TPS')
     p.add_argument('--cycle-binding-sweep', nargs='+', choices=('legacy', 'static'),
@@ -60,14 +62,18 @@ def main():
         p.error('Cycle recording requires --dflash-cycle and at least three cycles')
     if args.profile_dflash_cycle and (not args.record_dflash_cycle or args.cycle_steps < 5):
         p.error('Cycle profiling requires recording and at least five cycles')
-    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep) and not args.dflash_cycle:
+    if (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep or args.cycle_cohorts) and not args.dflash_cycle:
         p.error('Cycle sweeps require --dflash-cycle')
+    if args.cycle_cohorts and (args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_moe_sweep):
+        p.error('Explicit cohorts cannot be combined with Cartesian or compact12 sweeps')
     if args.cycle_moe_sweep and (args.cycle_batch_sweep != [3] or args.cycle_row_sweep != [4]):
         p.error('Private compact12 paired cycles require --cycle-batch-sweep3 --cycle-row-sweep4')
     if args.dflash_cycle:
         prompts = json.loads(args.cycle_prompts.read_text())
         if args.cycle_batch_sweep and max(args.cycle_batch_sweep) > len(prompts):
             p.error('Cycle sweep needs a real prompt fixture per independent request')
+        if args.cycle_cohorts and max(int(c.split('x')[0]) for c in args.cycle_cohorts) > len(prompts):
+            p.error('Explicit cohorts need one real prompt per independent request')
     from gaudi_kernels.engine.context import context
     from gaudi_kernels.serving.host_placement import vllm_kwargs
     from vllm import LLM, SamplingParams
@@ -154,10 +160,13 @@ def main():
             if len(result['target_features']) != 8 or not all(rank['pass'] for rank in result['target_features']):
                 raise RuntimeError('Target auxiliary feature boundary audit failed')
         if args.dflash_cycle:
-            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep
+            sweep = args.cycle_batch_sweep or args.cycle_row_sweep or args.cycle_binding_sweep or args.cycle_gqa_sweep or args.cycle_moe_sweep or args.cycle_cohorts
             result['dflash_sweep'] = []
-            for batch in args.cycle_batch_sweep or (len(prompts),):
-                for extent, binding_mode, gqa, moe_index, moe_mode in ((n, mode, g, i, m) for n in args.cycle_row_sweep or (args.cycle_verify_rows,)
+            cohorts = ([(int(c.split('x')[0]),(int(c.split('x')[1]),)) for c in args.cycle_cohorts]
+                       if args.cycle_cohorts else [(b,args.cycle_row_sweep or (args.cycle_verify_rows,))
+                                                  for b in args.cycle_batch_sweep or (len(prompts),)])
+            for batch, extents in cohorts:
+                for extent, binding_mode, gqa, moe_index, moe_mode in ((n, mode, g, i, m) for n in extents
                                                   for mode in args.cycle_binding_sweep or ('static',)
                                                   for g in args.cycle_gqa_sweep or ('broadcast',)
                                                   for i, m in enumerate(args.cycle_moe_sweep or ('production',))):
