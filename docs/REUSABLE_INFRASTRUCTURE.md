@@ -5,6 +5,9 @@ another model, while retaining measured performance. Reuse existing work first;
 new code must have a clear home and reusable boundary. Raw experiment assets,
 including failed alternatives, remain local. Git history preserves removed code.
 
+The first implementation and verification results are in
+[CONSOLIDATION_CHECKPOINT.md](CONSOLIDATION_CHECKPOINT.md).
+
 ## One owner per responsibility
 
 | Responsibility | Canonical source | What a new model supplies |
