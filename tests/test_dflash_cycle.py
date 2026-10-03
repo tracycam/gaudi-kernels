@@ -44,7 +44,10 @@ class DFlashCycleTests(unittest.TestCase):
                 return anchor[:, None] + torch.arange(4)[None, :, None]
 
             def __call__(self, noise, *args):
-                return noise.to(torch.bfloat16)
+                # The shared mock target head predicts hidden+1. DFlash must
+                # reconstruct the masked token at the same position; including
+                # its anchor output would therefore cause immediate rejection.
+                return (noise-1).to(torch.bfloat16)
 
             def project_context(self, features, positions):
                 values = features[..., :4].unsqueeze(2)

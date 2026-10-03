@@ -90,15 +90,27 @@ class DFlashCycle:
             binding = PackedInputBuffers(schedule, self.target.runner.device) if inputs is None else inputs
             starts = torch.stack([p[0] for p in metadata.query_positions])
             positions = starts[:, None] + torch.arange(self.draft.spec.block, device=starts.device)
-            embedding = self.target.model.embed_input_ids(anchor_ids)
-            context, context_positions, context_valid = self.context.state()
-            hidden = self.draft(self.draft.noise(embedding), positions, context, context_positions, context_valid)
-            logits = self.target.model.compute_logits(hidden.reshape(-1, self.draft.spec.hidden))
-            proposals = logits.reshape(len(self.request_ids), self.draft.spec.block, -1).argmax(-1).to(torch.int32)
-            # Query i consumes the anchor or preceding draft, not the target's
-            # own predicted token at i. No device IDs are read back on CPU.
-            queries = torch.cat((anchor_ids[:, None], proposals[:, :-1]), 1)
-            packed_ids = torch.cat([queries[i, :n] for i, n in enumerate(schedule.query_lengths)])
+            draft_lengths = tuple(n-1 for n in schedule.query_lengths)
+            if any(draft_lengths):
+                embedding = self.target.model.embed_input_ids(anchor_ids)
+                context, context_positions, context_valid = self.context.state()
+                hidden = self.draft(self.draft.noise(embedding), positions, context, context_positions, context_valid)
+                # DFlash is a denoiser: hidden position0 belongs to the known
+                # anchor. Unlike a causal target head, position j predicts the
+                # masked token at j. SGLang's DFlash worker selects hidden[:,1:].
+                selected = torch.cat([hidden[i, 1:n] for i, n in enumerate(schedule.query_lengths)])
+                logits = self.target.model.compute_logits(selected)
+                flat = logits.argmax(-1).to(torch.int32)
+                offset, queries, proposal_rows = 0, [], []
+                for i, length in enumerate(draft_lengths):
+                    tokens = flat[offset:offset+length]
+                    queries.append(torch.cat((anchor_ids[i:i+1], tokens)))
+                    proposal_rows.append(F.pad(tokens, (0, max(draft_lengths)-length), value=-1))
+                    offset += length
+                proposals, packed_ids = torch.stack(proposal_rows), torch.cat(queries)
+            else:
+                proposals = anchor_ids.new_empty((len(self.request_ids), 0))
+                packed_ids = anchor_ids
             binding.update_device(schedule, packed_ids, torch.cat(metadata.query_positions))
             target = self.target.execute_prepared(schedule, metadata, binding)
             decision = verify_logits(target.logits, binding.ids, schedule.query_lengths, remaining, eos_ids=eos_ids)
