@@ -5,7 +5,7 @@ p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);p
 root=Path(__file__).resolve().parents[1];out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 sources={'prefix':'moe_partition/prefix.c','inverse':'moe_partition/inverse.c',
  'row_map':'moe_partition/row_map.c','gather':'moe_route_tiles/gather.c',
- 'gate':'moe_route_tiles/gate.c','combine':'moe_partition/combine.c','decode':'moe_partition/decode.c','queue':'moe_partition/queue.c','queue_gemv':'moe_partition/masked_gemv_template.c','sparse_map':'moe_partition/sparse_map.c','counted_gather':'moe_partition/counted_gather.c'}
+ 'gate':'moe_route_tiles/gate.c','combine':'moe_partition/combine.c','decode':'moe_partition/decode.c','queue':'moe_partition/queue.c','queue_gemv':'moe_partition/masked_gemv_template.c','sparse_map':'moe_partition/sparse_map.c','counted_gather':'moe_partition/counted_gather.c','count':'moe_partition/count.c'}
 identity=root/'source-identity.json'
 commit=json.loads(identity.read_text())['git_commit'] if identity.exists() and not (root/'.git').exists() else subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
 names=['csrc/tpc/'+v for v in sources.values()]+['csrc/host/moe_partition_glue.cpp','csrc/torch/moe_partition.cpp','tools/build_moe_partition.py','csrc/tpc/mxfp4_compact/decode_bits.h','csrc/tpc/moe_partition/masked_gemv_baseline.s']

@@ -41,7 +41,7 @@ class ExpertPlanTests(unittest.TestCase):
     def test_no_fake_measured_threshold_or_unbounded_budget(self):
         self.assertEqual(ExpertPlan(64).buckets(4,8,384),())
         self.assertFalse(ExpertPlan(1,workspace_budget=1).costs(512,8,384)['fits_budget'])
-        for t in (-1,514,True):
+        for t in (-1,4097,True):
             with self.assertRaises(ValueError):ExpertPlan().buckets(t,8,384)
 
     def test_bounded_capacity_falls_back_without_losing_routes(self):

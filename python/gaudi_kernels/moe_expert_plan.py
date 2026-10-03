@@ -23,7 +23,7 @@ class ExpertPlan:
         if any(type(v) is not int for v in
                (tokens,routes,experts,self.min_mme_rows,self.down_n_tile,self.workspace_budget,self.max_slots_per_bucket)):
             raise ValueError('integer expert-plan geometry required')
-        if not (0 <= tokens <= 513 and 1 <= routes <= min(8,experts)
+        if not (0 <= tokens <= 4096 and 1 <= routes <= min(8,experts)
                 and 1 <= experts <= 384 and self.min_mme_rows >= 1
                 and self.down_n_tile in (512,1024,2048) and self.workspace_budget > 0):
             raise ValueError('unqualified expert-plan geometry')

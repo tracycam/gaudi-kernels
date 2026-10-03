@@ -8,7 +8,7 @@ import torch
 from .moe_expert_plan import ExpertPlan
 
 
-def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="historical", empty_mode=0, tpc_schedule="contiguous", padding_mode=None):
+def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc, debug=False, decoder="k8", empty_mode=0, tpc_schedule="contiguous", padding_mode=None):
     if type(plan) is not ExpertPlan or x.ndim != 2 or ids.ndim != 2:
         raise ValueError('explicit expert plan and token/route matrices required')
     t,r=ids.shape
@@ -38,11 +38,10 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
     if not cost['buckets']:
         result=tpc(x,ids,routing,gp,gs,down,ds,lut,directions)
         return (result,None,(),None) if debug else result
-    old=torch.ops.gaudi_route_metadata_v3
     op=torch.ops.gaudi_expert_partition
     core=torch.ops.gaudi_moe_reference
-    flat=old.flatten(ids)
-    counts,flags,offsets=old.count(ids,flat,e)
+    flat=op.reshape(ids,[t*r])
+    counts,flags,offsets=op.count(ids,flat,e)
     # GP and down see the same selected expert set. The device histogram is
     # shared by all buckets; no .item(), CPU copy, per-expert host branch or sync.
     buckets=[]
@@ -82,13 +81,13 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
         # One expert appears in exactly one slot, in exactly one bucket.
         # Unlike fixed-row route tiles, M is not split into repeated weight
         # decode tasks. Capacity padding belongs only to this expert's bucket.
-        ids_view=torch.ops.gaudi_route_tiles.reshape_i32(experts,[1,b.slots])
+        ids_view=op.reshape(experts,[1,b.slots])
         gates=[]
         for slot in range(0,b.slots,2):
             batch=min(2,b.slots-slot)
             a=(op.gather(x,mapping,status,r,b.rows,slot,batch) if padding_mode is None else op.counted_gather(x,mapping,valid,status,r,b.rows,slot,batch,padding_mode))
             w=decode(gp,gs,6144,512,512,slot,batch,0,ids_view)
-            gates.append(op.gate(core.batch_mm(a,w),valid,status,slot))
+            gates.append(op.gate(op.batch_mm(a,w),valid,status,slot))
         groups=[]
         for slot in range(0,b.slots,16):
             stop=min(slot+16,b.slots)
@@ -100,7 +99,7 @@ def expert_moe(x, ids, routing, gp, gs, down, ds, lut, directions, *, plan, tpc,
             for a,slot in zip(groups,range(0,b.slots,16)):
                 batch=min(16,b.slots-slot)
                 w=decode(down,ds,256,6144,plan.down_n_tile,slot,batch,n,ids_view)
-                partials.append(core.reshape(core.batch_mm(a,w),[batch*b.rows,plan.down_n_tile]))
+                partials.append(op.reshape(op.batch_mm(a,w),[batch*b.rows,plan.down_n_tile]))
             partial=partials[0] if len(partials)==1 else torch.cat(partials,dim=0)
             outputs.append(op.combine(partial,routing,inverse,status))
         result=result+torch.cat(outputs,dim=1)

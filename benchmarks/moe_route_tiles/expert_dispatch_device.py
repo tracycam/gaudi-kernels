@@ -8,6 +8,7 @@ from pathlib import Path
 p=argparse.ArgumentParser()
 p.add_argument('--tokens',type=int,choices=(8,32,128,512,513),required=True)
 p.add_argument('--thresholds',type=int,nargs='+',default=[64])
+p.add_argument('--self-contained',action='store_true')
 p.add_argument('--partition-library',type=Path,required=True)
 p.add_argument('--padding-mode',type=int,choices=(0,1,2))
 p.add_argument('--tpc-schedule',choices=('contiguous','queue'),default='contiguous')
@@ -41,7 +42,7 @@ import native_ops,batch_ops,precision_ops
 sys.path.insert(0,str(root/'python'))
 from gaudi_kernels.moe_expert_dispatch import expert_moe
 from gaudi_kernels.moe_expert_plan import ExpertPlan,reference_partition
-for name in ['gaudi_mxfp4_moe_graph.so','gaudi_route_metadata_v3.so','gaudi_route_tiles.so']:
+for name in ([] if a.self_contained else ['gaudi_mxfp4_moe_graph.so','gaudi_route_metadata_v3.so','gaudi_route_tiles.so']):
  torch.ops.load_library(str(root/'libraries'/name))
 torch.ops.load_library(str(a.partition_library.resolve()))
 torch.set_num_threads(4)
