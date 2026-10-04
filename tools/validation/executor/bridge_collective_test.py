@@ -35,6 +35,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
     try:
         for dtype in (torch.float32, torch.bfloat16):
             for kind in ('all-reduce', 'all-gather', 'mixed-rank-fallback'):
+                print(f'COLLECTIVE_PROBE rank={rank} dtype={dtype} kind={kind} capture', flush=True)
                 host = torch.full((8, 8), rank+1., dtype=dtype)
                 x = host.to('hpu')
                 weight = torch.ones((8, 8), dtype=dtype, device='hpu')
@@ -56,6 +57,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                     ht.core.mark_step()
                     y = gathered * 3 + 1
                     graph.capture_end()
+                print(f'COLLECTIVE_PROBE rank={rank} captured {kind}', flush=True)
                 ht.hpu.synchronize()
                 before = (_hpu_C.native_replay_stats(graph.hpu_graph)
                           if hasattr(_hpu_C, 'native_replay_stats') else None)
@@ -74,6 +76,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                     for index in range(8):
                         x.copy_((host+index).to('hpu'))
                         ht.core.mark_step()
+                        print(f'COLLECTIVE_PROBE rank={rank} kind={kind} replay={index}', flush=True)
                         graph.replay()
                         actual = y.cpu()
                         if kind == 'all-gather':
@@ -129,6 +132,7 @@ def main():
     parser.add_argument('--timing-replays', type=int, default=64)
     parser.add_argument('--worker-rank', type=int, choices=(0,1))
     parser.add_argument('--address')
+    parser.add_argument('--gdb-rank', type=int, choices=(0,1))
     args = parser.parse_args()
     if len(set(args.modules)) != 2 or any(module not in range(8) for module in args.modules):
         parser.error('two distinct module IDs required')
@@ -155,6 +159,10 @@ def main():
                        '--address', address, '--timing-replays', str(args.timing_replays)]
             if args.require_native:
                 command.append('--require-native')
+            if args.gdb_rank == rank:
+                command = ['gdb', '--batch', '-ex', 'set pagination off',
+                           '-ex', 'set confirm off', '-ex', 'run', '-ex', 'bt 30',
+                           '-ex', 'quit 88', '--args', *command]
             children.append(subprocess.Popen(command, env=env))
         while any(child.poll() is None for child in children):
             failed = [child.returncode for child in children if child.poll() not in (None, 0)]
