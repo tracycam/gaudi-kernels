@@ -2,7 +2,8 @@
 
 本轮目标：普通 PyTorch/HPU Graph 应用只换 bridge wheel，取得外置原生执行器的
 性能；不修改权重、精度、计算 kernel，不再依靠额外的 Python/C++ 执行器。
-目前已完成小图、分布式最小链和两层模型接线；70 层性能验收正在执行。
+已完成小图、分布式最小链和完整 70 层 B1/B2 对照。只换 bridge 已获得收益，
+B1 约 49 → 75 TPS，尚未达到 90 TPS，两个外置执行器尚不能弃用。
 
 ## 实现及收益来源
 
@@ -32,7 +33,7 @@ compute/collective 功能候选 `6169def46`；加入公共输入 replay 修复�
 | 范围 | 结果 | 限定 |
 |---|---|---|
 | 构建 | 全部 `-j 32`；最终 wheel `1.24.1+git413e535ce` | 独立 build/venv，不修改共享 SDK 或 Torch |
-| CPU C++ Storage/queue | 6 项通过，构建 `6169def46` | 真实 Storage 重绑、alias、extent；队列异常传播和嵌套提交 |
+| CPU C++ Storage/queue | 6 项在 `6169def46` 和最终 `413e535ce` 均通过 | 真实 Storage 重绑、alias、extent；队列异常传播和嵌套提交 |
 | 配置/serving/placement | 31 项通过 | 清洁普通启动分支和原路径兼容 |
 | 普通 wrapper | FP32/BF16 × M1/2/8/64/512 × 8 变化输入，最终 wheel 通过 | 小图，不是模型 TPS |
 | 输入 adapter | FP32/BF16 各 8 个新分配 + 2 个 reset/recapture 新输入 + 2 个非法输入检查 | native hits=0，明确属于回退 adapter |
@@ -52,8 +53,24 @@ bridge 提交及区间结束等待，不能称纯 GEMM 时间或乘到整模型 
 冻结应用 `c54d954ae033d367af520f363ca65840144055ea`，权重 MiMo-V2.6-Pro-RL，
 70 层、TP8、无 MTP、4K 上下文，B1/B2 各 128 token、2 轮。
 上游 bridge `5176b1b2d6865608514e83a2b1fd66459920676e` 对比候选 `413e535ce`。
-计划 fresh-process A/C/C/A，模型不随 arm 改代码。resident interval 与包含 prefill 的
-整个 generate wall 都保留；snapshot 在计时结束后取。结果完成后追加本节。
+首轮 fresh-process A/C 已完成，每臂各两轮。模型不随 arm 改代码。resident interval
+与包含 prefill 的整个 generate wall 都保留；snapshot 在计时结束后取。原计划继续
+C/A 配对，但现在优先诊断约 2.2 ms/步的剩余差距，避免只重复证明已有的收益。
+
+| 范围 | 上游 resident TPS | 候选 resident TPS | 候选 total TPS |
+|---|---:|---:|---:|
+| B1 round0 | 49.046 | 75.045 | 21.854 |
+| B1 round1 | 48.617 | 75.419 | 21.896 |
+| B2 round0，聚合 | 92.485 | 118.690 | 23.793 |
+| B2 round1，聚合 | 97.631 | 118.762 | 23.796 |
+
+768 个输出 token / 每臂、6 条序列全部一致。8 rank 每个两份 cached graph 均 ready，
+每份 284 条命令、141 个 collective；B1/B2 图分别重放 322/241 次，queued_replays
+等于 replay 次数。没有外置 executor 加载。B1 改善约 53–55%，但只做一个进程对，
+不称同进程 ABBA。重复文本用于性能和执行等价，不能当成独立语言质量测试。
+到 90 TPS 仍需 13.29 ms → 11.11 ms，约 2.18 ms/步。下一轮新增的 host observer
+只在计时结束后运行，保留 nested begin/end，区分 forward、logits、sampling、
+输入准备与 D2H 等待；这些时间不能简单相加，也不等于 GPU compute 时间。
 
 `tools.validation.executor.compare_bridge_model` 对比完成状态、同应用配置、各请求输出、
 全部 rank 的 native coverage，并分别报告 resident/total TPS。部分层明确
