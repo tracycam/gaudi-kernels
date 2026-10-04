@@ -57,6 +57,14 @@ def main():
     result['load_seconds'] = time.monotonic()-begin
     steps, counts = [], {}
     install_step_timer(llm.llm_engine, steps, counts)
+    # Reuse the historical measurement convention: expose each emitted token
+    # to the client timer rather than final-only output from LLM.generate.
+    from vllm.sampling_params import RequestOutputKind
+    def add_request(prompt, params, lora_request=None, priority=0):
+        params.output_kind = RequestOutputKind.CUMULATIVE
+        return llm.llm_engine.add_request(str(next(llm.request_counter)), prompt, params,
+                                         lora_request=lora_request, priority=priority)
+    llm._add_request = add_request
     token = llm.get_tokenizer().encode(' Describe software architecture.', add_special_tokens=False)
     prompts = [{'prompt_token_ids': (token*((args.context+len(token)-1)//len(token)))[:args.context]}
                for _ in range(max(batches))]
@@ -80,6 +88,8 @@ def main():
                         all(value == 1 for value in step['per_request_new']) and
                         step['emitted_min'] >= 16]
             if not resident:
+                result.update(status='FAIL', failed_steps=list(steps), failed_outputs=rows)
+                save()
                 raise AssertionError('No fully resident decode steps')
             result['runs'].append(dict(batch=batch, repeat=repeat, outputs=rows, steps=list(steps),
                 total_tokens=sum(len(row['ids']) for row in rows), wall_ms=(end-begin)/1e6,
