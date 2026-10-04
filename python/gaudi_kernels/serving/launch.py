@@ -64,7 +64,7 @@ def launch(*, manifest, plugin_source, vllm_source, module, arguments=(), python
     os.execve(python, command, environment)
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--plugin-source', type=Path, required=True)
     parser.add_argument('--vllm-source', type=Path, required=True)

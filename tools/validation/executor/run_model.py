@@ -12,7 +12,7 @@ def bounded_timeout(value):
     return seconds
 
 
-parser=argparse.ArgumentParser();parser.add_argument('case');parser.add_argument('mode',choices=['native','baseline'])
+parser=argparse.ArgumentParser(allow_abbrev=False);parser.add_argument('case');parser.add_argument('mode',choices=['native','baseline'])
 parser.add_argument('--timeout-seconds',type=bounded_timeout,default=1800,
                     help='Owned process-group wall budget, 60..7200 seconds; default remains 1800')
 parser.add_argument('--output-root', type=Path, required=True)
@@ -37,7 +37,7 @@ if source_identity.is_file():
         raise ValueError('Declared source commit does not match exported source')
     source_commit=exported
 
-assert '/' not in args.case and not (root/args.case).exists()
+assert '/' not in args.case and not (root/args.case).exists() and not (root/(args.case+'.exit.json')).exists()
 lock_root=Path.home()/'gaudi-llm-experiments/.codex-kernel-locks'
 lock_root.mkdir(parents=True,exist_ok=True)
 locks=[]
