@@ -17,6 +17,14 @@ class ConfigurationTests(unittest.TestCase):
             'router_post_vector+norm_fp32+moe_compact8+moe_sum_bf16+norm_qkv_grid24')
         self.assertEqual(PolicySelection(EngineConfig()).label, expected)
 
+    def test_framework_execution_rejects_external_replay_flags(self):
+        cfg = EngineConfig.from_dict({'runtime': {'executor': 'pytorch'}})
+        self.assertEqual(cfg.runtime.executor, 'pytorch')
+        for setting in ('native_enabled', 'batch_replay'):
+            with self.assertRaisesRegex(ConfigError, 'PyTorch execution'):
+                EngineConfig.from_dict({'runtime': {'executor': 'pytorch',
+                                                    'runner': 'native', setting: True}})
+
     def test_unknown_fields_and_scalar_types_fail(self):
         for document in ({'surprise': True}, {'decode': {'qkv': {'imlp': 'typo'}}},
                          {'parallel': {'tp': True}}, {'runtime': {'flights': '4'}},

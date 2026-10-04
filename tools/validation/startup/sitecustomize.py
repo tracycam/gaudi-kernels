@@ -4,7 +4,11 @@ if os.environ.get('GK_RUNTIME_MANIFEST'):
     try:
         import ctypes
         api=ctypes.CDLL(None)
-        if hasattr(api,'e1_configure_options'):
+        import json
+        from pathlib import Path
+        selected = json.loads(Path(os.environ['GK_RUNTIME_MANIFEST']).read_text())
+        framework = selected['selection']['engine'].get('runtime', {}).get('executor') == 'pytorch'
+        if framework or hasattr(api,'e1_configure_options'):
             from gaudi_kernels.serving.bootstrap import start
             start()
         else:

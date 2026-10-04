@@ -96,6 +96,44 @@ class ServingContextTests(unittest.TestCase):
         self.assertNotIn('tools/validation',source)
         self.assertNotIn('benchmark-module',source)
 
+    def test_framework_boot_does_not_require_executor_artifacts(self):
+        from gaudi_kernels.serving import bootstrap
+        from gaudi_kernels.serving.executor import native_backend
+        with tempfile.TemporaryDirectory() as folder:
+            document = self.document(folder)
+            document['selection']['engine']['runtime']['executor'] = 'pytorch'
+            ctx = runtime.initialize(document, directory=folder)
+            with patch.object(bootstrap, 'load_manifest', return_value=ctx), \
+                 patch.dict('os.environ', {'GK_RUNTIME_MANIFEST': 'fixture.json'}), \
+                 patch.dict('sys.modules', {'gaudi_kernels.serving.bootstrap_hooks': SimpleNamespace()}), \
+                 patch.object(bootstrap.ctypes, 'CDLL', side_effect=AssertionError('external executor loaded')):
+                self.assertIs(bootstrap.start(), ctx)
+                # install must return before importing Torch or probing e1 ABI.
+                with patch.dict('sys.modules', {'torch': None}):
+                    native_backend.install(SimpleNamespace())
+                with self.assertRaisesRegex(ValueError, 'absent'):
+                    native_backend.configure(SimpleNamespace(), True)
+
+    def test_framework_launcher_keeps_kernels_without_preload(self):
+        from gaudi_kernels.serving import launch, host_placement
+        with tempfile.TemporaryDirectory() as folder:
+            document = self.document(folder)
+            document['selection']['engine']['runtime']['executor'] = 'pytorch'
+            ctx = runtime.initialize(document, directory=folder)
+            manifest = Path(folder)/'manifest.json'
+            manifest.write_text('{}')
+            placement = {'binding': 'none', 'workers': [{'module_id': i} for i in range(8)]}
+            with patch.object(launch, 'load_manifest', return_value=ctx), \
+                 patch.object(host_placement, 'prepare', return_value=placement), \
+                 patch.dict('os.environ', {'LD_PRELOAD': '/missing/old-executor.so'}), \
+                 patch.object(launch.os, 'execve') as execute:
+                launch.launch(manifest=manifest, plugin_source=Path(folder),
+                              vllm_source=Path(folder), module='fixture')
+            environment = execute.call_args.args[2]
+            self.assertNotIn('LD_PRELOAD', environment)
+            self.assertIn('GC_KERNEL_PATH', environment)
+            self.assertIn('GK_RUNTIME_MANIFEST', environment)
+
     def test_manifest_is_strict(self):
         with tempfile.TemporaryDirectory() as folder:
             for mutation in ('bool_layers','text_bool','typo','wrong_hash','extra_binding'):

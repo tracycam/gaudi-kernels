@@ -50,10 +50,16 @@ class NativeHPUModelRunner(hpu.HPUModelRunner):
         return result
 
     def copy_input_to_device(self, role, source, **kwargs):
-        return self._native_transfers.upload(role, source, super().copy_input_to_device, **kwargs)
+        transfers = getattr(self, '_native_transfers', None)
+        if transfers is None:
+            return super().copy_input_to_device(role, source, **kwargs)
+        return transfers.upload(role, source, super().copy_input_to_device, **kwargs)
 
     def copy_output_to_cpu(self, role, source):
-        return self._native_transfers.download(role, source, super().copy_output_to_cpu)
+        transfers = getattr(self, '_native_transfers', None)
+        if transfers is None:
+            return super().copy_output_to_cpu(role, source)
+        return transfers.download(role, source, super().copy_output_to_cpu)
 
     def _wrap_model_adapter(self, *args, **kwargs):
         cls = adapter_class(hpu.HpuModelAdapter) if context().has('qkv_post') else hpu.HpuModelAdapter

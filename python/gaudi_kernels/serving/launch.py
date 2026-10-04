@@ -26,7 +26,11 @@ def launch(*, manifest, plugin_source, vllm_source, module, arguments=(), python
         environment['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
     environment['GK_RUNTIME_MANIFEST'] = str(manifest)
     environment['PYTHONPATH'] = os.pathsep.join((str(p.resolve(strict=True)) for p in (bootstrap, package, repository, plugin_source, vllm_source)))
-    environment['LD_PRELOAD'] = runtime.path('replay', 'host')
+    if runtime.selection.engine.runtime.executor == 'pytorch':
+        # Framework owns submission. Do not inherit unrelated preload hooks.
+        environment.pop('LD_PRELOAD', None)
+    else:
+        environment['LD_PRELOAD'] = runtime.path('replay', 'host')
     environment['GC_KERNEL_PATH'] = ':'.join((str(binding.path) for (name, binding) in runtime.artifacts.items() if name.endswith('.tpc')))
     if len(environment['GC_KERNEL_PATH'].split(':')) > 15:
         raise RuntimeError('Gaudi2 TPC database limit exceeded')

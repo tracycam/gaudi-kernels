@@ -114,7 +114,7 @@ class HostPlacement:
 class Runtime:
     # native_graph is admitted only by an explicit producer/runtime gate.
     # Parsing its name must not turn the old recorder into a new executor.
-    executor: Literal['legacy_native', 'native_graph'] = 'legacy_native'
+    executor: Literal['pytorch', 'legacy_native', 'native_graph'] = 'legacy_native'
     runner: Literal['legacy_hooks', 'native'] = 'legacy_hooks'
     native_enabled: bool = False
     batch_replay: bool = False
@@ -177,6 +177,8 @@ class EngineConfig:
             raise ConfigError('runtime.flights must be 1..16')
         _rows(self.runtime.buckets.batch, 'runtime.buckets.batch')
         _rows(self.runtime.buckets.tokens, 'runtime.buckets.tokens')
+        if self.runtime.executor == 'pytorch' and (self.runtime.native_enabled or self.runtime.batch_replay):
+            raise ConfigError('PyTorch execution must not enable an external replay engine')
         if self.runtime.batch_replay and (self.runtime.runner != 'native' or
                 self.runtime.executor != 'legacy_native' or self.runtime.buckets.tokens != (1,)):
             raise ConfigError('Named batch replay requires the owned runner and T1; verify is not admitted yet')

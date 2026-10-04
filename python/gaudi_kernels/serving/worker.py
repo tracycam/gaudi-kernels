@@ -85,6 +85,10 @@ class NativeHPUWorker(HPUWorker):
                 'records': list(runner._scheduled_token_records), 'dropped': runner._scheduled_token_dropped,
                 'scope': 'packed scheduling source; legacy model execution is unchanged'}
 
+    def framework_execution_snapshot(self):
+        from gaudi_kernels.serving.diagnostics.bridge import snapshot
+        return snapshot(self)
+
     def device_memory_snapshot(self, reset_peak=False):
         """Out-of-band allocator telemetry; never called inside inference."""
         import torch

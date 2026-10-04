@@ -9,6 +9,8 @@ import ctypes, json, os, time
 from pathlib import Path
 
 def install(module, *, runner_cls=None):
+    if execution_context().selection.engine.runtime.executor == 'pytorch':
+        return
     import torch
     import torch.distributed as dist
     import habana_frameworks.torch.core as hc
@@ -317,6 +319,8 @@ def install(module, *, runner_cls=None):
     print('NATIVE_BACKEND_INSTALLED synchronous_b1_greedy=1', flush=True)
 
 def configure(worker, active, single_rpc=False, reuse_pages=False, replay_mode='compact'):
+    if execution_context().selection.engine.runtime.executor == 'pytorch':
+        raise ValueError('External native replay is absent in PyTorch execution')
     modes = {'compact': 0, 'legacy': 1, 'detail': 2, 'device': 3}
     if replay_mode not in modes:
         raise ValueError('Unknown replay mode')
