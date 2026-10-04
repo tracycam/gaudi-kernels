@@ -78,7 +78,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                         ht.core.mark_step()
                         print(f'COLLECTIVE_PROBE rank={rank} kind={kind} replay={index}', flush=True)
                         if kind == 'mixed-rank-fallback' and rank == 1:
-                            graph.replay_with_inputs([x])
+                            graph.replayV3([x])
                         else:
                             graph.replay()
                         actual = y.cpu()
@@ -97,7 +97,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                     start = time.perf_counter_ns()
                     for _ in range(timing_replays):
                         if kind == 'mixed-rank-fallback' and rank == 1:
-                            graph.replay_with_inputs([x])
+                            graph.replayV3([x])
                         else:
                             graph.replay()
                     submitted = time.perf_counter_ns()
