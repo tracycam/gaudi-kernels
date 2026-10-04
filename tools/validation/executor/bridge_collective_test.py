@@ -77,7 +77,10 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                         x.copy_((host+index).to('hpu'))
                         ht.core.mark_step()
                         print(f'COLLECTIVE_PROBE rank={rank} kind={kind} replay={index}', flush=True)
-                        graph.replay()
+                        if kind == 'mixed-rank-fallback' and rank == 1:
+                            graph.replay_with_inputs([x])
+                        else:
+                            graph.replay()
                         actual = y.cpu()
                         if kind == 'all-gather':
                             expected = torch.cat([torch.full((8,8), 8*(peer+1+index), dtype=dtype)
@@ -93,7 +96,10 @@ def worker(rank, modules, address, output, require_native, timing_replays):
                     dist.barrier(group=control)
                     start = time.perf_counter_ns()
                     for _ in range(timing_replays):
-                        graph.replay()
+                        if kind == 'mixed-rank-fallback' and rank == 1:
+                            graph.replay_with_inputs([x])
+                        else:
+                            graph.replay()
                     submitted = time.perf_counter_ns()
                     ht.hpu.synchronize()
                     completed = time.perf_counter_ns()
