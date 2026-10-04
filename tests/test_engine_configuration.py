@@ -20,6 +20,9 @@ class ConfigurationTests(unittest.TestCase):
     def test_framework_execution_rejects_external_replay_flags(self):
         cfg = EngineConfig.from_dict({'runtime': {'executor': 'pytorch'}})
         self.assertEqual(cfg.runtime.executor, 'pytorch')
+        cfg = EngineConfig.from_dict({'runtime': {'executor': 'pytorch',
+            'buckets': {'batch': [1, 2, 8], 'tokens': [1, 4]}}})
+        self.assertEqual(DispatchTable(cfg).runtime_admission(), 'pytorch')
         for setting in ('native_enabled', 'batch_replay'):
             with self.assertRaisesRegex(ConfigError, 'PyTorch execution'):
                 EngineConfig.from_dict({'runtime': {'executor': 'pytorch',

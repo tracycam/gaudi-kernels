@@ -64,6 +64,10 @@ class DispatchTable:
         raise ValueError(f'Unknown operation: {request.op}')
 
     def runtime_admission(self):
+        if self.config.runtime.executor == 'pytorch':
+            if self.config.runtime.flights != 1:
+                raise ValueError('The serving adapter does not implement a framework flight pool')
+            return 'pytorch'
         if self.config.runtime.executor == 'native_graph':
             raise ValueError('Full-model explicit producer is not qualified; refusing recorder relabeling')
         r = self.config.runtime
