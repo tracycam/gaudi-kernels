@@ -28,6 +28,15 @@ parser.add_argument('--benchmark-module', default='tools.validation.executor.nat
                              'tools.validation.executor.native_batch_test',
                              'tools.validation.executor.prefill_dispatch_probe'))
 args,extra=parser.parse_known_args();root=args.output_root.resolve();root.mkdir(parents=True,exist_ok=True)
+source_root=Path(__file__).resolve().parents[3]
+source_identity=source_root/'source-identity.json'
+source_commit=os.getenv('SOURCE_GIT_COMMIT')
+if source_identity.is_file():
+    exported=json.loads(source_identity.read_text())['git_commit']
+    if source_commit and not exported.startswith(source_commit):
+        raise ValueError('Declared source commit does not match exported source')
+    source_commit=exported
+
 assert '/' not in args.case and not (root/args.case).exists()
 lock_root=Path.home()/'gaudi-llm-experiments/.codex-kernel-locks'
 lock_root.mkdir(parents=True,exist_ok=True)
@@ -41,7 +50,7 @@ blocked=lock_root/'device-query.blocked.json'
 if active_quarantine(blocked):raise RuntimeError('device query quarantined')
 command=['hl-smi','--query-aip=index,memory.used,utilization.aip','--format=csv,noheader']
 start=time.monotonic();meta={'returncode':None,'reason':None,'case':args.case,
-    'mode':args.mode,'arguments':extra,'source_commit':os.getenv('SOURCE_GIT_COMMIT'),
+    'mode':args.mode,'arguments':extra,'source_commit':source_commit,
     'requested_modules':list(range(8)), 'timeout_seconds':args.timeout_seconds,
     'runner_process':identity(os.getpid()), 'stage':'preflight'}
 def save():
