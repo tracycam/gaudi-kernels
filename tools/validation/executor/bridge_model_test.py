@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--context', type=int, default=4096)
     parser.add_argument('--batch-sizes', default='1,2')
     parser.add_argument('--rounds', type=int, default=2)
+    parser.add_argument('--diagnose', action='store_true',
+                        help='After all timing runs, collect bounded nested host-call timings')
     args = parser.parse_args()
     runtime = context()
     if runtime.selection.engine.runtime.executor != 'pytorch':
@@ -98,6 +100,16 @@ def main():
                 resident_tokens_per_second=sum(step['new_tokens'] for step in resident)*1000/
                                            sum(step['ms'] for step in resident),
                 resident_p50_ms=statistics.median(step['ms'] for step in resident)))
+            save()
+    if args.diagnose:
+        # Run only after measured requests. No new executor, device sync or
+        # tensor read is inserted by these observers. Restore before snapshot.
+        llm.collective_rpc('framework_timing', args=(True,))
+        try:
+            llm.generate(prompts[:1], SamplingParams(temperature=0, max_tokens=64, ignore_eos=True),
+                         use_tqdm=False)
+        finally:
+            result['host_timings'] = llm.collective_rpc('framework_timing', args=(False,))
             save()
     result['ranks'] = llm.collective_rpc('framework_execution_snapshot')
     if any(rank['external_executors'] for rank in result['ranks']):

@@ -89,6 +89,10 @@ class NativeHPUWorker(HPUWorker):
         from gaudi_kernels.serving.diagnostics.bridge import snapshot
         return snapshot(self)
 
+    def framework_timing(self, enabled):
+        from gaudi_kernels.serving.diagnostics.bridge_timing import configure
+        return configure(self, enabled)
+
     def device_memory_snapshot(self, reset_peak=False):
         """Out-of-band allocator telemetry; never called inside inference."""
         import torch
