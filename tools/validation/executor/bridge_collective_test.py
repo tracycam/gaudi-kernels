@@ -5,11 +5,15 @@ import os
 from pathlib import Path
 import socket
 import time
+import subprocess
+import sys
+import faulthandler
 
 
 def worker(rank, modules, address, output, require_native, timing_replays):
-    os.environ['HABANA_VISIBLE_MODULES'] = str(modules[rank])
     os.environ['HLS_MODULE_ID'] = str(modules[rank])
+    faulthandler.enable()
+    print(f'COLLECTIVE_PROBE rank={rank} module={modules[rank]} importing', flush=True)
     placement = json.loads((Path(output)/'host-placement.json').read_text())
     local = next(item for item in placement['workers'] if item['module_id'] == modules[rank])
     if placement['binding'] == 'local':
@@ -24,6 +28,7 @@ def worker(rank, modules, address, output, require_native, timing_replays):
     import habana_frameworks.torch.distributed.hccl  # register backend
     from habana_frameworks.torch import _hpu_C
     dist.init_process_group('hccl', rank=rank, world_size=len(modules), init_method=address)
+    print(f'COLLECTIVE_PROBE rank={rank} initialized HCCL', flush=True)
     control = dist.new_group(backend='gloo')
     records = []
     graph = None
@@ -122,17 +127,52 @@ def main():
     parser.add_argument('--modules', nargs=2, type=int, default=(5, 4))
     parser.add_argument('--require-native', action='store_true')
     parser.add_argument('--timing-replays', type=int, default=64)
+    parser.add_argument('--worker-rank', type=int, choices=(0,1))
+    parser.add_argument('--address')
     args = parser.parse_args()
     if len(set(args.modules)) != 2 or any(module not in range(8) for module in args.modules):
         parser.error('two distinct module IDs required')
     if args.timing_replays < 1:
         parser.error('positive replay count required')
+    if args.worker_rank is not None:
+        worker(args.worker_rank, tuple(args.modules), args.address, str(args.out),
+               args.require_native, args.timing_replays)
+        return
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         address = f'tcp://127.0.0.1:{sock.getsockname()[1]}'
-    import torch.multiprocessing as mp
-    mp.spawn(worker, args=(tuple(args.modules), address, str(args.out), args.require_native,
-                          args.timing_replays), nprocs=2, join=True)
+    children = []
+    try:
+        for rank, module in enumerate(args.modules):
+            env = dict(os.environ, HLS_MODULE_ID=str(module), RANK=str(rank),
+                       LOCAL_RANK=str(rank), WORLD_SIZE='2',
+                       HABANA_LOGS=str(args.out/f'habana-rank{rank}'))
+            # Select the module before Torch's backend autoload, matching the
+            # existing serving worker factory. Children inherit the supervisor
+            # process group so its bounded cleanup also owns both ranks.
+            command = [sys.executable, '-m', __spec__.name, '--out', str(args.out),
+                       '--modules', *map(str, args.modules), '--worker-rank', str(rank),
+                       '--address', address, '--timing-replays', str(args.timing_replays)]
+            if args.require_native:
+                command.append('--require-native')
+            children.append(subprocess.Popen(command, env=env))
+        while any(child.poll() is None for child in children):
+            failed = [child.returncode for child in children if child.poll() not in (None, 0)]
+            if failed:
+                raise RuntimeError(f'owned rank failed: {failed}')
+            time.sleep(.1)
+        if any(child.returncode for child in children):
+            raise RuntimeError('owned rank failed')
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+        for child in children:
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=5)
     ranks = [json.loads((args.out/f'rank{rank}.json').read_text()) for rank in range(2)]
     (args.out/'result.json').write_text(json.dumps(dict(status='PASS', ranks=ranks), indent=2)+'\n')
     print('Two-rank compute/collective/consumer checks PASS', flush=True)
