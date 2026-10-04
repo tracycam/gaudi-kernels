@@ -20,7 +20,8 @@ parser.add_argument('--manifest', type=Path, required=True)
 parser.add_argument('--plugin-source', type=Path, required=True)
 parser.add_argument('--vllm-source', type=Path, required=True)
 parser.add_argument('--benchmark-module', default='tools.validation.executor.native_service_test',
-                    choices=('tools.validation.executor.bridge_model_test',
+                    choices=('tools.validation.executor.bridge_collective_test',
+                             'tools.validation.executor.bridge_model_test',
                              'tools.validation.executor.native_service_test',
                              'tools.validation.executor.migration_latency_repeat',
                              'tools.validation.executor.packed_model_probe',
