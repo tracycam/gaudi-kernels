@@ -10,6 +10,14 @@ import time
 def worker(rank, modules, address, output, require_native, timing_replays):
     os.environ['HABANA_VISIBLE_MODULES'] = str(modules[rank])
     os.environ['HLS_MODULE_ID'] = str(modules[rank])
+    placement = json.loads((Path(output)/'host-placement.json').read_text())
+    local = next(item for item in placement['workers'] if item['module_id'] == modules[rank])
+    if placement['binding'] == 'local':
+        for task in Path('/proc/self/task').iterdir():
+            try:
+                os.sched_setaffinity(int(task.name), local['allowed_local_cpus'])
+            except ProcessLookupError:
+                pass
     import torch
     import torch.distributed as dist
     import habana_frameworks.torch as ht
@@ -97,7 +105,8 @@ def worker(rank, modules, address, output, require_native, timing_replays):
         if any('libe1_' in path or 'libgkg' in path for path in libraries):
             raise AssertionError('External executor loaded')
         result = dict(status='PASS', rank=rank, module=modules[rank], records=records,
-                      libraries=libraries, scope='Two-rank normal graph functional/hot-replay probe; not model TPS')
+                      libraries=libraries, cpu_affinity=sorted(os.sched_getaffinity(0)),
+                      scope='Two-rank normal graph functional/hot-replay probe; not model TPS')
         (Path(output)/f'rank{rank}.json').write_text(json.dumps(result, indent=2)+'\n')
     finally:
         if graph is not None:

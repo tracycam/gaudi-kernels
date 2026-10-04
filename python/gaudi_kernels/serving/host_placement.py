@@ -131,12 +131,14 @@ def snapshot(worker):
     # get_mempolicy(NULL,NULL,0,NULL,0) is invalid; query the mode only.
     mode = ctypes.c_int()
     rc = lib.get_mempolicy(ctypes.byref(mode), None, 0, None, 0)
-    api = ctypes.CDLL(None)
-    api.e1_host_buffer_addresses.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_uint32]
-    api.e1_host_buffer_addresses.restype = ctypes.c_uint32
-    amount = api.e1_host_buffer_addresses(None, 0)
-    addresses = (ctypes.c_uint64*amount)()
-    api.e1_host_buffer_addresses(addresses, amount)
+    addresses = ()
+    if runtime.selection.engine.runtime.executor != 'pytorch':
+        api = ctypes.CDLL(None)
+        api.e1_host_buffer_addresses.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_uint32]
+        api.e1_host_buffer_addresses.restype = ctypes.c_uint32
+        amount = api.e1_host_buffer_addresses(None, 0)
+        addresses = (ctypes.c_uint64*amount)()
+        api.e1_host_buffer_addresses(addresses, amount)
     regions = []
     for line in Path('/proc/self/maps').read_text().splitlines():
         start, end = [int(v, 16) for v in line.split()[0].split('-')]
