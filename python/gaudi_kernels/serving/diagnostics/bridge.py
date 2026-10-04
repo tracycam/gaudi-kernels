@@ -25,7 +25,7 @@ def snapshot(worker):
                  if runtime.has(name)}
     external = [path for path in libraries if path in forbidden or
                 'libe1_' in path or 'libgkg' in path]
-    return dict(rank=worker.rank, torch=torch.__version__, bridge=ht.__file__,
+    return dict(rank=worker.rank, torch=str(torch.__version__), bridge=ht.__file__,
                 executor=runtime.selection.engine.runtime.executor,
                 graph_cache_entries=len(cache), plans=plans,
                 libraries=libraries, external_executors=external,

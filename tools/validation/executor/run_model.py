@@ -93,6 +93,7 @@ try:
             with (root/(args.case+'.log')).open('rb') as src:src.seek(offset);chunk=src.read();offset=src.tell()
             fatal=any(x in chunk for x in [b'ValidateSyncInputTensors tensor_data is empty',b'Engine core initialization failed.',b'Synapse detected a device critical error',b'PT_DEVMEM OOM',b'FIXED_PLAN_REPLAY_ERROR'])
             fatal=fatal or b'RuntimeError: Empty tensor optional' in chunk
+            fatal=fatal or b'is not serializableSet VLLM_ALLOW_INSECURE_SERIALIZATION' in chunk
             fatal=fatal or (b'E1_GATE' in chunk and b'"status": "FAIL"' in chunk)
             if fatal or time.monotonic()-start>args.timeout_seconds:
                 meta['reason']='fatal rank error' if fatal else str(args.timeout_seconds)+' second timeout'
