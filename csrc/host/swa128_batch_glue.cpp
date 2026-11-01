@@ -18,7 +18,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKerne
  if(in->nodeParams.nodeParamsSize!=4||!in->nodeParams.nodeParams)return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
  float scale=*static_cast<float*>(in->nodeParams.nodeParams);if(!std::isfinite(scale)||scale<=0)return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
  unsigned long rows=in->inputTensors[0].geometry.maxSizes[2],slots=in->inputTensors[1].geometry.maxSizes[2],pages=in->inputTensors[3].geometry.maxSizes[0];
- if(!rows||rows>32||!slots||slots%128||slots>INT_MAX/192||!pages||pages>4096)return GLUE_INCOMPATIBLE_INPUT_SIZE;
+ if(!rows||rows>512||!slots||slots%128||slots>INT_MAX/192||!pages||pages>4096)return GLUE_INCOMPATIBLE_INPUT_SIZE;
  if(!(shape(in->inputTensors[0],DATA_BF16,{3072,1,rows})||shape(in->inputTensors[0],DATA_BF16,{192,16,rows}))||!shape(in->inputTensors[1],DATA_BF16,{192,1,slots})||!shape(in->inputTensors[2],DATA_BF16,{128,1,slots})||!shape(in->inputTensors[6],DATA_BF16,{16})||!shape(in->inputTensors[3],DATA_I32,{pages})||!shape(in->inputTensors[4],DATA_I32,{pages})||!(shape(in->inputTensors[5],DATA_I32,{rows})||shape(in->inputTensors[5],DATA_I32,{1,rows})))return GLUE_INCOMPATIBLE_INPUT_SIZE;
  if(!shape(in->outputTensors[0],DATA_BF16,{128,16,rows}))return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
  out->indexSpaceRank=2;out->indexSpaceGeometry[0]=16;out->indexSpaceGeometry[1]=rows;
