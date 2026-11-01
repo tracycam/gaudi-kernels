@@ -6,6 +6,9 @@
 #ifndef BATCH_WINDOW
 #define BATCH_WINDOW 0
 #endif
+#ifndef BATCH_DIRECT
+#define BATCH_DIRECT 0
+#endif
 #ifndef AV_GROUP_HOIST
 #define AV_GROUP_HOIST 0
 #endif
@@ -86,11 +89,19 @@ void main(tensor query,tensor key,tensor value,tensor page_ids,
  int pos=s_i32_ld_g(gen_addr(pp,position)),slots=get_dim_size(key,2);float ni=-1.0f/0.0f;
  int logical0=(s_i32_max(0,pos-127)>>7)<<7,logical1=logical0+128;
  int physical0=-1,physical1=-1,found=0;
+#if BATCH_DIRECT
+ // GaudiRT stores each row's two window entries consecutively.
+ int5 mp={row*2,0,0,0,0};
+ if(s_i32_ld_g(gen_addr(mp,groups))==row)physical0=s_i32_ld_g(gen_addr(mp,page_ids));
+ ++mp[0];
+ if(s_i32_ld_g(gen_addr(mp,groups))==row)physical1=s_i32_ld_g(gen_addr(mp,page_ids));
+#else
  for(int entry=0;entry<get_dim_size(page_ids,0);++entry){
   int5 mp={entry,0,0,0,0};int group=s_i32_ld_g(gen_addr(mp,groups));
   if(group==row){int page=s_i32_ld_g(gen_addr(mp,page_ids));if(found==0)physical0=page;else if(found==1)physical1=page;++found;}
  }
  if(found>2){physical0=-1;physical1=-1;}
+#endif
 #else
  int pos=s_i32_ld_g(gen_addr(zero,position)),slots=get_dim_size(key,2);float ni=-1.0f/0.0f;
  int5 one={1,0,0,0,0};
