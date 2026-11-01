@@ -27,7 +27,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   if(in->inputTensorNr!=inputs || in->outputTensorNr!=outputs) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   out->kernel.paramsNr=0;
   const auto rows=in->inputTensors[0].geometry.maxSizes[1];
-  if(rows!=32 && rows!=256 && rows!=512 && rows!=1024) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if(rows!=32 && rows!=256 && rows!=512 && rows!=1024 && rows!=2048) return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if(variant==0) {
     if(!shape(in->inputTensors[0],DATA_F32,{4096,rows}) || !shape(in->outputTensors[0],DATA_F32,{2048,rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
     out->indexSpaceRank=2; out->indexSpaceGeometry[0]=16; out->indexSpaceGeometry[1]=rows;

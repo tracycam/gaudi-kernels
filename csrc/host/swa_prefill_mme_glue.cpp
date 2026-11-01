@@ -25,7 +25,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
  auto*x=in->inputTensors;auto*y=in->outputTensors;
  if(id==0){
   unsigned long slots=x[0].geometry.maxSizes[2],rows=x[4].geometry.maxSizes[0];
-  if((rows!=512&&rows!=1024)||!slots||slots%128||!shape(x[0],DATA_BF16,{192,1,slots})||!shape(x[1],DATA_BF16,{128,1,slots})||
+  if((rows!=512&&rows!=1024&&rows!=2048)||!slots||slots%128||!shape(x[0],DATA_BF16,{192,1,slots})||!shape(x[1],DATA_BF16,{128,1,slots})||
      !shape(x[2],DATA_I32,{2*rows})||!shape(x[3],DATA_I32,{2*rows})||!shape(x[4],DATA_I32,{rows})||
      !shape(y[0],DATA_BF16,{192,384,rows/128})||!shape(y[1],DATA_BF16,{128,384,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
   out->indexSpaceRank=2;out->indexSpaceGeometry[0]=384;out->indexSpaceGeometry[1]=rows/128;
@@ -34,7 +34,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   unsigned long rows=x[1].geometry.maxSizes[0];
   float scale=*static_cast<float*>(in->nodeParams.nodeParams);
   if(!std::isfinite(scale)||scale<=0)return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  if((rows!=512&&rows!=1024)||!shape(x[0],DATA_F32,{384,2048,rows/128})||!shape(x[1],DATA_I32,{rows})||!shape(x[2],DATA_BF16,{16})||
+  if((rows!=512&&rows!=1024&&rows!=2048)||!shape(x[0],DATA_F32,{384,2048,rows/128})||!shape(x[1],DATA_I32,{rows})||!shape(x[2],DATA_BF16,{16})||
      !shape(y[0],DATA_BF16,{384,2048,rows/128})||!shape(y[1],DATA_BF16,{384,2048,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
   out->indexSpaceRank=2;out->indexSpaceGeometry[0]=2048;out->indexSpaceGeometry[1]=rows/128;
   for(unsigned i=0;i<2;++i){auto&p=out->outputTensorAccessPattern[i];p.mapping[0]={0,0,0,383};p.mapping[1]={0,1,0,0};p.mapping[2]={1,1,0,0};}
