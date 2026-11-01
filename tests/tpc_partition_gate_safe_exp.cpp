@@ -82,14 +82,10 @@ int main() {
   }
   std::vector<float> partial(512 * 3, 0.0f);
   for (size_t i = 0; i < 3 * 256; ++i) {
-    const size_t row = i % 256;
-    const size_t packed = (row / 128) * 128 + (row % 128) / 2 + (row % 2) * 64;
-    partial[(i / 256) * 512 + 256 + packed] = static_cast<float>(1 + i % 7) / 8.0f;
+    partial[(i / 256) * 512 + 256 + i % 256] = static_cast<float>(1 + i % 7) / 8.0f;
   }
   for (size_t i = 0; i < boundaries.size(); ++i) {
-    const size_t row = i % 256;
-    const size_t packed = (row / 128) * 128 + (row % 128) / 2 + (row % 2) * 64;
-    partial[(i / 256) * 512 + packed] = boundaries[i];
+    partial[(i / 256) * 512 + i % 256] = boundaries[i];
   }
   const int32_t valid = 3, status = 0;
   std::vector<uint16_t> actual(256 * 3);
