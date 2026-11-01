@@ -4,21 +4,52 @@
 #include <cstring>
 using namespace tpc_lib_api;
 extern "C" unsigned char _binary_dense_weight_split_o_start, _binary_dense_weight_split_o_end;
+extern "C" unsigned char _binary_dense_activation_split_o_start, _binary_dense_activation_split_o_end;
 namespace {
 constexpr const char* name = "gk_dense_block128_decode_split_v1";
-bool named(const char* value) { return value && !std::strcmp(value,name); }
+constexpr const char* activation_name = "gk_dense_activation_split_v1";
+bool named(const char* value) { return value && (!std::strcmp(value,name) || !std::strcmp(value,activation_name)); }
 template<class T> void map(T& p,int dim,int index,float stride,int lo,int hi) {
   p.mapping[dim].indexSpaceDim=index; p.mapping[dim].a=stride;
   p.mapping[dim].start_b=lo; p.mapping[dim].end_b=hi;
 }
 }
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device,uint32_t* count,GuidInfo* info) {
-  const auto capacity=*count; *count=device==DEVICE_ID_GAUDI2?1:0;
+  const auto capacity=*count; *count=device==DEVICE_ID_GAUDI2?2:0;
   if(info && capacity && *count) std::strcpy(info[0].name,name);
+  if(info && capacity>1 && *count) std::strcpy(info[1].name,activation_name);
   return GLUE_SUCCESS;
 }
 extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKernelInstantiation* out) {
   if(!named(in->guid.name)) return GLUE_NODE_NOT_FOUND;
+  if(!std::strcmp(in->guid.name,activation_name)) {
+    if(in->inputTensorNr!=1 || in->outputTensorNr!=2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+    const auto& x=in->inputTensors[0].geometry;
+    if(x.dims!=2 || x.dataType!=DATA_F32 || !x.maxSizes[0] || x.maxSizes[0]%128 ||
+       !x.maxSizes[1] || x.maxSizes[1]>2048 || x.minSizes[0]!=x.maxSizes[0] ||
+       x.minSizes[1]!=x.maxSizes[1]) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+    out->indexSpaceRank=2; out->indexSpaceGeometry[0]=x.maxSizes[0]/128; out->indexSpaceGeometry[1]=x.maxSizes[1];
+    for(unsigned i=0;i<2;++i) {
+      const auto& y=in->outputTensors[i].geometry;
+      if(y.dims!=2 || y.dataType!=DATA_BF16 || y.maxSizes[0]!=x.maxSizes[0] ||
+         y.maxSizes[1]!=x.maxSizes[1] || y.minSizes[0]!=y.maxSizes[0] ||
+         y.minSizes[1]!=y.maxSizes[1]) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+    }
+    out->inputTensorAccessPattern[0].allRequired=0;
+    map(out->inputTensorAccessPattern[0],0,0,128,0,127);
+    map(out->inputTensorAccessPattern[0],1,1,1,0,0);
+    for(unsigned i=0;i<2;++i) {
+      out->outputTensorAccessPattern[i].allRequired=0;
+      map(out->outputTensorAccessPattern[i],0,0,128,0,127);
+      map(out->outputTensorAccessPattern[i],1,1,1,0,0);
+    }
+    out->kernel.paramsNr=0;
+    const auto size=&_binary_dense_activation_split_o_end-&_binary_dense_activation_split_o_start;
+    const auto capacity=out->kernel.elfSize; out->kernel.elfSize=size;
+    if(capacity<size) return GLUE_INSUFFICIENT_ELF_BUFFER;
+    std::memcpy(out->kernel.kernelElf,&_binary_dense_activation_split_o_start,size);
+    return GLUE_SUCCESS;
+  }
   if(in->inputTensorNr!=2 || in->outputTensorNr!=2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   const auto& w=in->inputTensors[0].geometry; const auto& s=in->inputTensors[1].geometry;
   const auto n=w.maxSizes[1], groups=w.maxSizes[2];
