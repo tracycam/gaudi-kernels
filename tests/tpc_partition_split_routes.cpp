@@ -17,6 +17,9 @@ namespace {
 #ifndef TEST_ROWS
 #define TEST_ROWS 512
 #endif
+#ifndef TEST_TILE_DIVISOR
+#define TEST_TILE_DIVISOR 8
+#endif
 constexpr int kRows = TEST_ROWS, kRoutes = 8, kExperts = 384, kLength = kRows * kRoutes;
 void check(synStatus status) {
   if (status != synSuccess) throw std::runtime_error("partition routes: Synapse failure " + std::to_string(status));
@@ -73,7 +76,7 @@ int main() {
   struct Band { int rows, slots; size_t experts, valid, status, inverse; };
   std::array<Band, 1> bands{};
   {
-    const int rows = kRows / 8, slots = kExperts + (kLength + rows - 1) / rows;
+    const int rows = kRows / TEST_TILE_DIVISOR, slots = kExperts + (kLength + rows - 1) / rows;
     auto pref = make("prefix", {kExperts + 1});
     auto experts = make("experts", {static_cast<uint64_t>(slots)});
     auto base = make("base", {static_cast<uint64_t>(slots)});
