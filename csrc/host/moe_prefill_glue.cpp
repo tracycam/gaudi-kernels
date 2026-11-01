@@ -28,10 +28,12 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   if(in->nodeParams.nodeParamsSize!=sizeof(Params) || !in->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& p=*static_cast<const Params*>(in->nodeParams.nodeParams);
   if(!std::isfinite(p.factor) || (p.renormalize!=0 && p.renormalize!=1) || (p.apply_scale!=0 && p.apply_scale!=1)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  if(!shape(in->inputTensors[0],DATA_F32,{384,32}) || !shape(in->inputTensors[1],DATA_I32,{8,32}) ||
-     !shape(in->outputTensors[0],DATA_F32,{8,32}) || !shape(in->outputTensors[1],DATA_I32,{8,32}) ||
-     !shape(in->outputTensors[2],DATA_F32,{1,32})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  out->indexSpaceGeometry[0]=32; out->kernel.paramsNr=3; std::memcpy(out->kernel.scalarParams,&p,sizeof(p));
+  const auto rows=in->inputTensors[0].geometry.maxSizes[1];
+  if((rows!=32 && rows!=256 && rows!=512) ||
+     !shape(in->inputTensors[0],DATA_F32,{384,rows}) || !shape(in->inputTensors[1],DATA_I32,{8,rows}) ||
+     !shape(in->outputTensors[0],DATA_F32,{8,rows}) || !shape(in->outputTensors[1],DATA_I32,{8,rows}) ||
+     !shape(in->outputTensors[2],DATA_F32,{1,rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  out->indexSpaceGeometry[0]=rows; out->kernel.paramsNr=3; std::memcpy(out->kernel.scalarParams,&p,sizeof(p));
  } else {
   if(in->nodeParams.nodeParamsSize!=sizeof(int32_t) || !in->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   int32_t parameter; std::memcpy(&parameter,in->nodeParams.nodeParams,sizeof(parameter));
