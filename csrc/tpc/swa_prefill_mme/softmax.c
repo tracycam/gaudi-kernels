@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // FP32 causal 128-window softmax including the per-head sink. Split the
-// probabilities into BF16 high/low parts for two MME PV products.
+// probabilities into three BF16 parts for MME PV products.
 #include "../common/tpc_math_safe.h"
-void main(tensor scores,tensor positions,tensor sinks,tensor high,tensor low,float scale){
+void main(tensor scores,tensor positions,tensor sinks,tensor high,tensor low,tensor tail,float scale){
  int5 begin=get_index_space_offset(),end=begin+get_index_space_size();
  uint64 lane=read_lane_id_4b_b();float ni=-1.0f/0.0f;
  for(int batch=begin[1];batch<end[1];++batch){
@@ -40,8 +40,12 @@ void main(tensor scores,tensor positions,tensor sinks,tensor high,tensor low,flo
     bfloat128 upper=convert_float128_to_bfloat128(pair,SW_LINEAR|SW_RHNE);
     float128 rounded=convert_bfloat128_to_float128(upper,SW_LINEAR);
     float128 residual={pair.v1-rounded.v1,pair.v2-rounded.v2};
+    bfloat128 middle=convert_float128_to_bfloat128(residual,SW_LINEAR|SW_RHNE);
+    float128 rounded_middle=convert_bfloat128_to_float128(middle,SW_LINEAR);
+    float128 remainder={residual.v1-rounded_middle.v1,residual.v2-rounded_middle.v2};
     int5 dst={block*128,col,batch,0,0};v_bf16_st_tnsr(dst,high,upper);
-    v_bf16_st_tnsr(dst,low,convert_float128_to_bfloat128(residual,SW_LINEAR|SW_RHNE));
+    v_bf16_st_tnsr(dst,low,middle);
+    v_bf16_st_tnsr(dst,tail,convert_float128_to_bfloat128(remainder,SW_LINEAR|SW_RHNE));
    }
   }
  }

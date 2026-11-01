@@ -7,7 +7,7 @@ using namespace tpc_lib_api;
 extern "C" unsigned char _binary_swa_mme_gather_o_start,_binary_swa_mme_gather_o_end;
 extern "C" unsigned char _binary_swa_mme_softmax_o_start,_binary_swa_mme_softmax_o_end;
 namespace {
-constexpr const char* names[]={"gk_swa_mme_gather_v1","gk_swa_mme_softmax_v1"};
+constexpr const char* names[]={"gk_swa_mme_gather_v1","gk_swa_mme_softmax_three_v2"};
 int which(const char* s){for(int i=0;i<2;++i)if(!std::strcmp(s,names[i]))return i;return -1;}
 bool shape(const Tensor& t,TensorDataType type,std::initializer_list<unsigned long> sizes){
  if(t.geometry.dataType!=type||t.geometry.dims!=sizes.size())return false;
@@ -20,7 +20,7 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId d,uint32_t* count,GuidInfo* ou
 }
 extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKernelInstantiation* out){
  int id=which(in->guid.name);if(id<0)return GLUE_NODE_NOT_FOUND;
- if(in->inputTensorNr!=(id?3u:5u)||in->outputTensorNr!=2)return GLUE_INCOMPATIBLE_INPUT_COUNT;
+ if(in->inputTensorNr!=(id?3u:5u)||in->outputTensorNr!=(id?3u:2u))return GLUE_INCOMPATIBLE_INPUT_COUNT;
  if(in->nodeParams.nodeParamsSize!=(id?4u:0u)||(id&&!in->nodeParams.nodeParams))return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
  auto*x=in->inputTensors;auto*y=in->outputTensors;
  if(id==0){
@@ -35,9 +35,9 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   float scale=*static_cast<float*>(in->nodeParams.nodeParams);
   if(!std::isfinite(scale)||scale<=0)return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   if((rows!=512&&rows!=1024&&rows!=2048)||!shape(x[0],DATA_F32,{384,2048,rows/128})||!shape(x[1],DATA_I32,{rows})||!shape(x[2],DATA_BF16,{16})||
-     !shape(y[0],DATA_BF16,{384,2048,rows/128})||!shape(y[1],DATA_BF16,{384,2048,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
+     !shape(y[0],DATA_BF16,{384,2048,rows/128})||!shape(y[1],DATA_BF16,{384,2048,rows/128})||!shape(y[2],DATA_BF16,{384,2048,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
   out->indexSpaceRank=2;out->indexSpaceGeometry[0]=2048;out->indexSpaceGeometry[1]=rows/128;
-  for(unsigned i=0;i<2;++i){auto&p=out->outputTensorAccessPattern[i];p.mapping[0]={0,0,0,383};p.mapping[1]={0,1,0,0};p.mapping[2]={1,1,0,0};}
+  for(unsigned i=0;i<3;++i){auto&p=out->outputTensorAccessPattern[i];p.mapping[0]={0,0,0,383};p.mapping[1]={0,1,0,0};p.mapping[2]={1,1,0,0};}
   out->kernel.paramsNr=1;std::memcpy(out->kernel.scalarParams,&scale,4);
  }
  for(unsigned i=0;i<in->inputTensorNr;++i)out->inputTensorAccessPattern[i].allRequired=1;
