@@ -17,11 +17,12 @@ void main(tensor partial,tensor valid_rows,tensor status,tensor output,int slot_
     float128 gs={0},us={0};
     gs.v1+=v_f32_ld_tnsr_b(gp,partial);gp[0]+=64;gs.v2+=v_f32_ld_tnsr_b(gp,partial);
     us.v1+=v_f32_ld_tnsr_b(up,partial);up[0]+=64;us.v2+=v_f32_ld_tnsr_b(up,partial);
-    bfloat128 u=v_convert_f32_to_bf16_all_b(us);
     float128 g=gs;
     g.v1=g.v1*v_reciprocal_f32(1.f+tpc_exp_f32_safe(-g.v1));g.v2=g.v2*v_reciprocal_f32(1.f+tpc_exp_f32_safe(-g.v2));
-    bfloat128 silu=v_convert_f32_to_bf16_all_b(g);
-    uint128 lanes=v_convert_u16_to_u32_all_b((ushort128)(silu*u));
+    g.v1*=us.v1; g.v2*=us.v2;
+    bfloat128 product=v_convert_f32_to_bf16_all_b(g);
+    // Restore linear MME channels without another floating-point rounding.
+    uint128 lanes=v_convert_u16_to_u32_all_b((ushort128)product);
     bfloat128 result=(bfloat128)convert_uint128_to_ushort128(lanes,SW_LINEAR);
     v_bf16_st_tnsr(dst,output,result);
    }

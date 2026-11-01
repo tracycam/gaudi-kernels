@@ -82,7 +82,7 @@ int main() {
   }
   std::vector<float> partial(512 * 3, 0.0f);
   for (size_t i = 0; i < 3 * 256; ++i) {
-    partial[(i / 256) * 512 + 256 + i % 256] = static_cast<float>(1 + i % 7) / 8.0f;
+    partial[(i / 256) * 512 + 256 + i % 256] = static_cast<float>(1 + i % 7) / 9.0f;
   }
   for (size_t i = 0; i < boundaries.size(); ++i) {
     partial[(i / 256) * 512 + i % 256] = boundaries[i];
@@ -103,8 +103,8 @@ int main() {
   unsigned failures = 0;
   for (size_t i = 0; i < boundaries.size(); ++i) {
     const double gate = boundaries[i];
-    const float silu = widen(bf16(static_cast<float>(gate / (1.0 + std::exp(-gate)))));
-    const float up = static_cast<float>(1 + i % 7) / 8.0f;
+    const float silu = static_cast<float>(gate / (1.0 + std::exp(-gate)));
+    const float up = static_cast<float>(1 + i % 7) / 9.0f;
     const auto expected = bf16(silu * up);
     if (actual[i] != expected) {
       if (failures < 8) std::printf("boundary %.9g actual %.9g expected %.9g\n", gate, widen(actual[i]), widen(expected));
