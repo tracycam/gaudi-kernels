@@ -33,7 +33,7 @@ if a.tpc_include_dir:
         raise ValueError('modern tpc_kernel_lib_interface.h required; old gcapi is not interchangeable')
     for name in ['decode_native','decode_rows','decode_rows256']:
         commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',name+'.o',name+'_x86.o'])
-    commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs',
+    commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack',
                      '-I'+str(a.tpc_include_dir.resolve()),str(root/'csrc/host/mxfp4_compact_glue.cpp'),
                      'decode_native_x86.o','decode_rows_x86.o','decode_rows256_x86.o','-o','libgaudi_mxfp4_compact_tpc.so'])
     commands.append(['g++','-O2','-std=c++17','-I'+str(a.tpc_include_dir.resolve()),
@@ -41,7 +41,7 @@ if a.tpc_include_dir:
                      '-lgaudi_mxfp4_compact_tpc','-o','glue_audit'])
 if a.native:
     if not a.public_include_dir or not a.tpc_include_dir:raise ValueError('native build requires both public and TPC SDK headers')
-    commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs',
+    commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack',
                      '-I'+str(a.public_include_dir.resolve()),str(root/'csrc/ops/mxfp4_compact.cpp'),
                      '-L/usr/lib/habanalabs','-Wl,-rpath,/usr/lib/habanalabs','-lSynapse','-o','libgaudi_mxfp4_compact.so'])
     commands.append(['g++','-O3','-std=c++17','-I'+str(a.public_include_dir.resolve()),

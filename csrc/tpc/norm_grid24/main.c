@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// M1/H6144 only. Grid24 repeats small activation statistics, not weights.
+// 1<=M<=16384, 256<=H<=8192 (H%256==0). Grid24 repeats small activation statistics, not weights.
 // Quantization helpers preserve the qualified residual_rmsnorm/fused.c contract.
 static inline float64 native_value(float64 x,float64 scale,float64 reciprocal){
  float64 z=x*reciprocal;
@@ -25,37 +25,52 @@ static inline float64 scale_from_bits(short128 bits){
  float128 wide=v_convert_bf16_to_f32_all_b((bfloat128)peak);
  return v_f32_max_b(wide.v1,1e-10f)*(1.f/448.f);
 }
-void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor q_out,tensor scales,float epsilon){
+void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor q_out,tensor scales,float epsilon,int blocks){
  const int width=get_dim_size(x,0);
  int5 begin=get_index_space_offset(),end=begin+get_index_space_size();
- for(int task=begin[0];task<end[0];++task){
-  int start=task*256;
+ bfloat128 saved[64];
+ for(int row=begin[1];row<end[1];++row){
   float128 ss={0,0};
-  bfloat128 own0=0,own1=0;
-  // Every task repeats exactly the same chronological BF16-add/FP32-MAC chain.
-  // The output ownership predicate never changes a statistics operand.
-  for(int k=0;k<width;k+=128){
-   int5 p={k,0,0,0,0};
-   bfloat128 r=v_bf16_ld_tnsr_b(p,x)+v_bf16_ld_tnsr_b(p,residual);
-   own0=v_bf16_mov_b(r,0,own0,k==start);
-   own1=v_bf16_mov_b(r,0,own1,k==start+128);
-   ss=v_bf16_mac_acc32_b(r,r,ss);
+  int5 pk0={0,row,0,0,0},pk1={128,row,0,0,0};
+  // Every row repeats the exact chronological BF16-add/FP32-MAC chain, 2 blocks at a time.
+  for(int k=0;k<width;k+=256){
+   pk0[0]=k; pk1[0]=k+128;
+   bfloat128 x0=v_bf16_ld_tnsr_b(pk0,x),r0=v_bf16_ld_tnsr_b(pk0,residual);
+   bfloat128 x1=v_bf16_ld_tnsr_b(pk1,x),r1=v_bf16_ld_tnsr_b(pk1,residual);
+   bfloat128 s0=x0+r0,s1=x1+r1;
+   saved[k/128]=s0; saved[k/128+1]=s1;
+   ss=v_bf16_mac_acc32_b(s0,s0,ss);
+   ss=v_bf16_mac_acc32_b(s1,s1,ss);
   }
   float64 sum=v_f32_reduce_add(ss.v1+ss.v2);
   float64 inverse=v_rsqrt_f32(sum*(1.0f/(float)width)+epsilon);
-  for(int j=0;j<2;++j){
-   int k=start+j*128;int5 p={k,0,0,0,0};
-   bfloat128 saved=v_bf16_mov_b(own1,0,own0,j==1);
-   v_bf16_st_tnsr(p,residual_out,saved);
-   float128 r=v_convert_bf16_to_f32_all_b(saved);
-   float128 w=v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_b(p,gamma));
-   float128 y={r.v1*inverse*w.v1,r.v2*inverse*w.v2};
-   // This BF16 norm boundary precedes amax and activation conversion.
-   bfloat128 norm=convert_float128_to_bfloat128(y,SW_RHNE);
-   float64 scale=scale_from_bits((short128)((ushort128)norm&0x7fff));
-   int5 q={0,0,k/128,0,0};
-   v_f32_st_tnsr_partial(q,scales,scale*2.f,0,0);
-   v_f8_st_tnsr_partial(q,q_out,quant(norm,scale),127,0);
+  for(int task=begin[0];task<end[0];++task){
+   int base_block=task*blocks;
+   for(int j=0;j<blocks;j+=2){
+    int blk0=base_block+j,blk1=blk0+1;
+    int k0=blk0*128,k1=blk1*128;
+    int5 p0={k0,row,0,0,0},p1={k1,row,0,0,0},g0={k0,0,0,0,0},g1={k1,0,0,0,0};
+    bfloat128 rb0=saved[blk0],rb1=saved[blk1];
+    bfloat128 gw0=v_bf16_ld_tnsr_b(g0,gamma),gw1=v_bf16_ld_tnsr_b(g1,gamma);
+    v_bf16_st_tnsr(p0,residual_out,rb0);
+    v_bf16_st_tnsr(p1,residual_out,rb1);
+    float128 rf0=v_convert_bf16_to_f32_all_b(rb0),rf1=v_convert_bf16_to_f32_all_b(rb1);
+    float128 wf0=v_convert_bf16_to_f32_all_b(gw0),wf1=v_convert_bf16_to_f32_all_b(gw1);
+    float128 y0={rf0.v1*inverse*wf0.v1,rf0.v2*inverse*wf0.v2};
+    float128 y1={rf1.v1*inverse*wf1.v1,rf1.v2*inverse*wf1.v2};
+    // This BF16 norm boundary precedes amax and activation conversion.
+    bfloat128 norm0=convert_float128_to_bfloat128(y0,SW_RHNE);
+    bfloat128 norm1=convert_float128_to_bfloat128(y1,SW_RHNE);
+    float64 sc0=scale_from_bits((short128)((ushort128)norm0&0x7fff));
+    float64 sc1=scale_from_bits((short128)((ushort128)norm1&0x7fff));
+    minifloat256 qv0=quant(norm0,sc0);
+    minifloat256 qv1=quant(norm1,sc1);
+    int5 q0={0,row,blk0,0,0},q1={0,row,blk1,0,0};
+    v_f32_st_tnsr_partial(q0,scales,sc0*2.f,0,0);
+    v_f32_st_tnsr_partial(q1,scales,sc1*2.f,0,0);
+    v_f8_st_tnsr_partial(q0,q_out,qv0,127,0);
+    v_f8_st_tnsr_partial(q1,q_out,qv1,127,0);
+   }
   }
  }
 }

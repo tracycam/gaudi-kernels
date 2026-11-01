@@ -40,7 +40,7 @@ try:
   report['targets'][target]={'deployed_provenance':provenance,'schedule':schedule,'text_matches_deployed_assembly':True,
                             'candidate_elf_sha256':sha((out/(stem+'.o')).read_bytes()),'candidate_text_sha256':sha((out/(stem+'.text')).read_bytes())}
  glue=root/'csrc/host/moe_activation_folded_glue.cpp';(out/'glue.cpp').write_bytes(glue.read_bytes())
- run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I/usr/lib/habanatools/include','glue.cpp','folded_gp_x86.o','folded_down_x86.o','-o','libgaudi_moe_activation_folded_tpc.so'])
+ run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I/usr/lib/habanatools/include','glue.cpp','folded_gp_x86.o','folded_down_x86.o','-o','libgaudi_moe_activation_folded_tpc.so'])
  library=(out/'libgaudi_moe_activation_folded_tpc.so').read_bytes()
  for target in ['gp','down']:
   assert embedded_elf(library,'folded_'+target)==(out/('folded_'+target+'.o')).read_bytes()

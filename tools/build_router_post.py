@@ -21,7 +21,7 @@ try:
    for action,suffix in [('-c','o'),('-S','s')]:run(['/usr/bin/tpc-clang','-O2','-ffp-contract=off','-mcpu=gaudi2',action,str(root/'csrc/tpc/moe_router'/name),'-o',mode+'.'+suffix])
    run(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',mode+'.o',mode+'_x86.o'])
    with (out/(mode+'.objdump')).open('w') as f:subprocess.run(['tpc-llvm-objdump','--triple=tpc','-d',str(out/(mode+'.o'))],stdout=f,check=True,timeout=30)
-  run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I/usr/lib/habanatools/include',str(root/'csrc/host/moe_router_post_glue.cpp'),'scalar_x86.o','vector_x86.o','-o','libgaudi_router_post8_tpc.so'])
+  run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I/usr/lib/habanatools/include',str(root/'csrc/host/moe_router_post_glue.cpp'),'scalar_x86.o','vector_x86.o','-o','libgaudi_router_post8_tpc.so'])
   run(['g++','-O2','-std=c++17','-I/usr/lib/habanatools/include',str(root/'benchmarks/moe_router/simulate_post.cpp'),'-L/usr/lib/habanatools','-Wl,-rpath,/usr/lib/habanatools','-ltpc_tests_core_ext','-o','simulator'])
  if a.torch or a.torch_only:
   os.environ['PT_HPU_LAZY_MODE']='1';os.environ.setdefault('MAX_JOBS','2')

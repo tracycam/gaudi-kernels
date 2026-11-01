@@ -14,7 +14,7 @@ for policy,name in enumerate(['fused','per_row','block128']):
 pure=root/'csrc/tpc/residual_rmsnorm/pure.c'
 for mode,suffix in [('-c','o'),('-S','s')]:commands.append([a.tpc_compiler,'-O2','-ffp-contract=off','-mcpu=gaudi2',mode,str(pure),'-o',f'pure.{suffix}'])
 commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64','pure.o','pure_x86.o']);objects.append('pure_x86.o')
-commands += [['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.glue_include,str(glue),*objects,'-o','libgaudi_residual_rmsnorm_tpc.so']]
+commands += [['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.glue_include,str(glue),*objects,'-o','libgaudi_residual_rmsnorm_tpc.so']]
 identity=json.loads((root/'source-identity.json').read_text()) if (root/'source-identity.json').exists() else {}
 if a.native:commands.append(['g++','-O2','-std=c++17','-I'+a.glue_include,str(root/'benchmarks/residual_rmsnorm/native.cpp'),'-L/usr/lib/habanalabs','-lSynapse','-o','residual_rmsnorm_native'])
 m={'commit':identity.get('git_commit') or subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'status':'exported' if identity else subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True),'commands':commands,'state':'building','runtime_verified':False}

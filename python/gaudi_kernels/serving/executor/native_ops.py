@@ -1,11 +1,6 @@
 """Graph-native TP expert path; one N-major packed weight copy."""
 from gaudi_kernels.engine.context import context as execution_context
-from pathlib import Path
-import os
 import torch
-ROOT = Path(__file__).resolve().parent
-LEGACY = 'pt2' == 'legacy'
-BRIDGE = 'pt2'
 torch.ops.load_library(execution_context().path('native'))
 
 @torch.library.register_fake('native_mxfp4::rank_sum')
@@ -45,15 +40,13 @@ def moe(x, ids, routing, gp, gs, dp, ds, table, directions, splits=3):
     width = 256
     topk = ids.shape[-1]
     ids = ids.to(torch.int32)
-    routing = routing.to(torch.float32 if '1' == '1' else torch.bfloat16)
-    if not LEGACY:
-        ids = ids.clone()
-        routing = routing.clone()
-        x = x.clone()
+    routing = routing.to(torch.float32)
+    ids = ids.clone()
+    routing = routing.clone()
+    x = x.clone()
     (ax, gm) = torch.ops.native_mxfp4.prep(x, ids, 2 * width // 512, splits, topk)
     gp_out = torch.ops.native_mxfp4.gemv(gp, gs, ax, table, gm)
     (dx, dm) = torch.ops.native_mxfp4.gate(gp_out, ids, width, h)
     partial = torch.ops.native_mxfp4.gemv(dp, ds, dx, table, dm)
     from gaudi_kernels.serving.executor.precision_ops import combine
     return combine(partial, routing, directions, h, topk)
-    return torch.ops.native_mxfp4.combine(partial, routing, directions, h, topk)

@@ -75,7 +75,9 @@ def _static(module):
     if type(qkv.quant_method) is not state.method_class or 'apply' in qkv.quant_method.__dict__:return 'block_method_override'
     if not getattr(qkv,'_gk_block_fp8_selected',False):return 'qkv_not_selected'
     if qkv.bias is not None:return 'qkv_bias_not_qualified'
-    if (qkv._gk_block_fp8.n,qkv._gk_block_fp8.k)!=(3392,6144):return 'prepared_geometry'
+    if (qkv._gk_block_fp8.n<=0 or qkv._gk_block_fp8.k!=n.weight.shape[0]
+            or qkv._gk_block_fp8.k<256 or qkv._gk_block_fp8.k>8192 or qkv._gk_block_fp8.k%256!=0):
+        return 'prepared_geometry'
     for name,m in [('input_norm',n),('self_attention',attention),('qkv',qkv)]:
         if post._rotary_hook_contract(m)[0].startswith('unsupported'):return name+'_hooks'
     return None
@@ -86,12 +88,10 @@ def _reason(module,positions,x,residual):
     if reason:return reason
     if post._POLICY!='fused':return 'qkv_post_policy'
     state=block._active
-    # The small-batch policy has exactly the same M1 block-A8 contract. Keep
-    # its qualified M1 fusion when a mixed request batch temporarily has one
-    # active row. The producer's shape guard below still rejects M>1.
     if state.policy not in ('decode_a8_bf16_fp32','small_batch_a8_bf16_fp32'):return 'block_policy'
+    max_rows=16 if state.policy=='small_batch_a8_bf16_fp32' else 1
     n=module.input_layernorm
-    reason=input_reason(x,residual,n.weight,n.variance_epsilon,norm_policy=norm.get_norm_policy(),activation_policy='per_block_fp8')
+    reason=input_reason(x,residual,n.weight,n.variance_epsilon,norm_policy=norm.get_norm_policy(),activation_policy='per_block_fp8',max_rows=max_rows)
     if reason:return reason
     if getattr(n,'variance_size_override',None) is not None:return 'variance_override'
     if state.audit_enabled and state.audit_contract!='fp32_arithmetic_v1':return 'legacy_audit'
@@ -181,8 +181,11 @@ def install(policy='separate',*,model=None):
         _TARGET.forward=functools.wraps(_ORIGINAL)(_forward)
     elif _TARGET is not MiMoV2FlashDecoderLayer:raise RuntimeError('decoder class changed after grid24 installation')
     if policy=='grid24':
-        from .norm_grid24_binding import verify
-        _BINDING=verify()
+        from . import norm_grid24_binding as _grid24_binding
+        from .engine import artifact_pins as _artifact_pins
+        for _k in tuple(_grid24_binding.PINS):
+            _grid24_binding.PINS[_k]=_artifact_pins.PINS['.'.join(_k)]
+        _BINDING=_grid24_binding.verify()
         getattr(torch.ops.gaudi_norm_grid24,'block128')
     previous=_POLICY;_POLICY=policy
     return {'previous':previous,'policy':policy,'graph_invalidation_required':previous!=policy,

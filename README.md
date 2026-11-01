@@ -3,6 +3,12 @@
 Gaudi2 LLM kernels, numerical contracts, native execution experiments, and a
 vLLM integration layer. Licensed under [Apache-2.0](LICENSE).
 
+> **Companion Zero-Legacy-Bridge Runtime**: For the C++20 Synapse C API runtime,
+> persistent recipe cache, `PrivateUse1` PyTorch backend, and 70-layer TP8
+> decode/`M=32` prefill graph builders paired with this snapshot (`d23e585`), see
+> **[`tracycam/GaudiRT`](https://github.com/tracycam/GaudiRT)** (`8fc3b3b`) and
+> [Phase 4.2 publication provenance](docs/PUBLICATION.md).
+
 This is a research source release. It contains working, shape-specific kernels
 and an integrated multi-request decode implementation, alongside experimental
 alternatives. It is **not a turnkey inference server**, a general replacement
@@ -13,12 +19,14 @@ for CUDA Graph, or a claim that every kernel beats the vendor implementation.
 - BF16, ordinary FP8, block-scaled FP8, and MXFP4 linear/GEMV/GEMM paths.
 - TPC decode/compute, SRAM-to-MME graph builders, and numerical reference code.
 - RMSNorm, residual, QKV postprocessing, RoPE/KV, SWA, and MoE building blocks.
-- Typed execution policies, physical-device/NUMA binding, native capture/replay,
+- Typed operator policies, physical-device/NUMA binding, PyTorch bridge execution,
   and repository-owned vLLM worker/model-runner classes.
 - CPU tests, assembly sources, benchmark drivers, and profiling analysis tools.
 
 See [architecture](docs/ARCHITECTURE.md), [measured status and limitations](docs/STATUS.md),
 [build instructions](docs/BUILDING.md), and [numerical contracts](docs/CONTRACTS.md).
+The next implementation checkpoints and acceptance criteria are in the
+[unified execution plan](docs/UNIFIED_EXECUTION_PLAN.md).
 
 ## Start without a Gaudi device
 
@@ -45,16 +53,18 @@ PYTHONPATH=python python -m pytest tests -q
 
 Device builds require a separately installed compatible Gaudi SDK, TPC compiler,
 and PyTorch HPU stack. The qualified development stack was Gaudi2 / Synapse 1.24.1
-/ PyTorch HPU 2.7; other combinations require validation. Proprietary SDKs,
+/ PyTorch HPU 2.11 for the current bridge fork; other combinations require validation. Proprietary SDKs,
 compiled experiment libraries, model weights, private prompts, and raw traces
 are not distributed here.
 
 ## vLLM integration
 
-vLLM owns requests, scheduling, KV allocation, and output delivery. Our worker and
-runner own the eligible native execution path. Single-step B2/B3 decode was tested
-with a 70-layer MiMo model on TP8; full native multi-token verification and the
-MTP/DFlash cycle remain unfinished.
+vLLM owns requests, scheduling, KV allocation, and output delivery. The worker and
+runner express the inputs and capture scope; the PyTorch bridge owns execution.
+Generic integration uses `FrameworkHPUWorker` without MiMo manifests; the reference
+model's operator installation lives in `MimoHPUWorker`. Validation RPCs and intrusive instrumentation
+are isolated in `DiagnosticHPUWorker`. The admitted whole-step scope currently
+covers plain synchronous greedy decode. MTP/prefill extensions need their own gates.
 
 The source expects additional interfaces in the development vLLM-Gaudi plugin.
 An [interface patch](integrations/vllm-gaudi/README.md) is included for review;
@@ -64,7 +74,11 @@ also requires separately built and qualified artifacts with matching SHA pins.
 
 ## Performance reporting
 
-The latest local full-model results were approximately 90–92 tokens/s for one
+The qualified bridge-plus-serving combination achieved 91.02 tokens/s for one
+non-speculative B1 stream and 137.77 tokens/s aggregate for B2 at 4K. These results
+use bridge `47f28b972f9` and serving `a450e13`; the current cleanup must be revalidated.
+They do not establish unchanged-application, bridge-only or cross-model gains.
+Earlier native executor results were approximately 90–92 tokens/s for one
 non-speculative stream. With 4K contexts, two streams achieved about 63 tokens/s
 each and three about 60–61 **after all requests entered decode**. Prefill caused
 substantial earlier stalls. These are development-system observations, not
@@ -74,18 +88,23 @@ One Python/FFI call is not one hardware launch: the integrated replay still
 submits hundreds of SDK operations. Algorithmic bytes/time is not a measurement
 of physical HBM transactions. Kernel speedups are not automatically model speedups.
 
+The [consolidation contract and roadmap](docs/REUSABLE_INFRASTRUCTURE.md) identifies
+which components are reusable, which remain model-specific, and how cleanup is
+checked without sacrificing the measured execution path.
+
 ## Source layout
 
 ```text
 python/gaudi_kernels/engine/    Typed policies and artifact ownership
 python/gaudi_kernels/serving/   Launcher, worker, runner, model adapter
-  executor/                   Capture, bindings, replay, query state
+  models/                     Model-specific weight/layout adapters
+  executor/                   Operator bindings and experimental query state
+  diagnostics/                Explicit validation worker and probes
 csrc/tpc/                     TPC source kernels
 csrc/host/                    Kernel database glue
 csrc/ops/                     Synapse graph construction
 csrc/torch/                   PyTorch custom-operator registration
-csrc/legacy_executor/         Current integrated capture/replay runtime
-csrc/native_graph/            Explicit graph/resource infrastructure
+tools/archive/legacy_execution/ Retired runtimes; excluded from installable distributions
 reference/                    Numerical and implementation references
 benchmarks/                   Experimental probes and benchmark drivers
 tools/                        Build, validation, and analysis utilities

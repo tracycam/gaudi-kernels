@@ -20,7 +20,7 @@ def grouped_topk_one(gating_output, topk, renormalize, num_expert_group, topk_gr
         weights = None
     else:
         (weights, ids) = torch.topk(scores, k=topk, dim=-1, sorted=False)
-    if _POST is not None:
+    if _POST is not None and original_scores.shape[0] == 1:
         candidate = _POST(original_scores, ids, renormalize, routed_scaling_factor)
         if candidate is not None:
             return candidate

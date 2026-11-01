@@ -52,10 +52,22 @@ Manifests bind actual files and SHA identities; the typed policy JSON examples
 under `config/` alone are not deployment manifests. The interface patch under
 `integrations/` is a reviewable part of the plugin work, not the entire model fork.
 
-Native execution is enabled explicitly with `runtime.native_enabled=true` and
-the native runner policy after model initialization. Current admission requires
-synchronous scheduling and one concurrent batch; native speculation is not yet
-admitted. Do not bypass artifact validation to make an unqualified build start.
+Production uses PyTorch execution (`runtime.executor="pytorch"`) and the normal
+`MimoHPUWorker` for the reference kernel manifest. `runtime.decode_graph="step"` selects the admitted whole-step
+scope; `"forward"` preserves forward-only capture. Enabled historical replay flags
+are rejected. Diagnostic workers are selected only by validation tools.
+
+The integration requires a matching bridge fork exposing `InputBufferCache`.
+The qualified bridge ABI is Python 3.12 / Torch 2.11 / Synapse 1.24.1. Build through
+the bridge's existing `.devops/build.py` with parallel compilation and install
+into an isolated environment. Do not bypass artifact checks or replace shared
+SDK/driver installations. Prefill/speculative/sampling modes retain explicit
+support and fallback boundaries.
+
+Other models can use `FrameworkHPUWorker` and `additional_config["hpu_graph"]`
+without a MiMo manifest; see [BRIDGE_FRAMEWORK.md](BRIDGE_FRAMEWORK.md). This
+generic integration is not a promise that every model/quantization backend has
+optimized operators or that untested modes are captured.
 
 `tools/verify_assets.py` and some historical consolidation tools expect private
 artifact manifests and evidence. Those inputs are intentionally absent from the

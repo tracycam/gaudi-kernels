@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tools.consolidation.analyze_device_trace import ENGINES, analyze, duration
+from tools.consolidation.analyze_device_trace import ENGINES, analyze, analyze_chrome, chrome_windows, duration
 
 
 class DeviceTraceTests(unittest.TestCase):
@@ -39,6 +39,8 @@ class DeviceTraceTests(unittest.TestCase):
 
     def test_gap_accounting_includes_compute_edges(self):
         result = self.check(self.fixture())
+        self.assertIn('NIC Internal', result['engines_without_execution_events'])
+        self.assertNotIn('TPC', result['engines_without_execution_events'])
         idle = sum(row['average_total_ms_per_replay'] for row in result['compute_gap_bins'].values())
         idle += result['compute_edge_idle_ms_per_replay']
         self.assertEqual(idle, result['average_per_replay_ms']['compute_idle'])
@@ -47,6 +49,43 @@ class DeviceTraceTests(unittest.TestCase):
     def test_union_handles_touching_and_empty_intervals(self):
         self.assertEqual(duration([]), 0)
         self.assertEqual(duration([(1, 4), (2, 3), (4, 5)]), 4)
+
+    def test_chrome_device_lanes_clip_windows_and_exclude_host(self):
+        rows = [dict(ph='M', name='process_name', pid=0, args={'name':'/device:HPU:0'})]
+        for tid, name in [(1,'[D0] TPC 0'),(2,'[D1] TPC 0'),(3,'[D0] MME'),(4,'Port 0')]:
+            rows.append(dict(ph='M',name='thread_name',pid=0,tid=tid,args={'name':name}))
+        for pid,tid,start,dur in [(0,1,0,1000),(0,2,500,1000),(0,3,1250,500),
+                                  (0,4,2000,250),(10,1,0,3000)]:
+            rows.append(dict(ph='X',name='kernel',pid=pid,tid=tid,ts=start,dur=dur))
+        result = analyze_chrome(dict(traceEvents=rows), [(250,2250)])
+        window = result['windows'][0]
+        self.assertEqual(window['TPC_ms'],1.25)
+        self.assertEqual(window['compute_union_ms'],1.5)
+        self.assertEqual(window['selected_engine_idle_ms'],.25)
+        self.assertEqual(window['window_ms'],2)
+        self.assertIn('PDMA',result['engines_without_execution_events'])
+        with self.assertRaisesRegex(ValueError,'nonoverlapping'):
+            analyze_chrome(dict(traceEvents=rows), [(0,1000),(500,1500)])
+
+    def test_overlapping_descriptors_can_reuse_context_id(self):
+        metadata = self.fixture()[:5]
+        spans = [dict(ph=phase, pid=3, tid=52, id=123, ts=t, name='DmaBroadcast', cat='SP8')
+                 for phase, t in (('B', 0), ('B', 1), ('E', 2), ('E', 3))]
+        for event in spans[2:]:
+            event['cat'] = 'SP15'
+        # Descriptor sum would be4us, but physical occupancy is3us.
+        result = self.check(metadata+spans)['average_per_replay_ms']
+        self.assertEqual(result['PDMA'], .003)
+        with self.assertRaisesRegex(ValueError, 'Unclosed'):
+            self.check(metadata+spans[:-1])
+
+    def test_reference_clock_translation_preserves_submicrosecond_windows(self):
+        epoch = 1790857026000000000
+        spec = dict(base_time_ns=epoch, intervals_us=[(1.125, 4.375)])
+        self.assertEqual(chrome_windows(dict(baseTimeNanoseconds=epoch+1000),spec),
+                         [(0.125,3.375)])
+        with self.assertRaisesRegex(ValueError,'Integer'):
+            chrome_windows(dict(baseTimeNanoseconds=float(epoch)),spec)
 
 
 if __name__ == '__main__':

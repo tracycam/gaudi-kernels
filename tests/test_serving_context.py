@@ -65,6 +65,26 @@ class ServingContextTests(unittest.TestCase):
             self.assertEqual(str(ctx.artifact('swa_bundle','tpc').path),binding['path'])
             self.assertFalse(ctx.has('absent'))
 
+    def test_moe_sidecars_are_pinned_and_colocated_before_loading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            document=self.document(folder)
+            for key,name in (('moe_bundle.tpc','bundle.so'),
+                             ('moe_batch_provider.host','provider_batch.so'),
+                             ('moe_expert_provider.host','provider_expert.so')):
+                path=Path(folder)/name;path.write_bytes(key.encode())
+                digest=hashlib.sha256(path.read_bytes()).hexdigest()
+                runtime.PINS[key]=digest
+                document['artifacts'][key]={'path':str(path),'sha256':digest}
+            missing=document['artifacts'].pop('moe_batch_provider.host')
+            with self.assertRaisesRegex(ConfigError,'provider'):
+                runtime.initialize(document,directory=folder)
+            document['artifacts']['moe_batch_provider.host']=missing
+            runtime.initialize(document,directory=folder)
+            runtime._CONTEXT=None
+            (Path(folder)/'provider_expert.so').write_bytes(b'tampered')
+            with self.assertRaisesRegex(ConfigError,'bytes changed'):
+                runtime.initialize(document,directory=folder)
+
     def test_missing_adapter_boundary_is_rejected_before_capture(self):
         from gaudi_kernels.serving.model_adapter import adapter_class
         with self.assertRaisesRegex(RuntimeError, 'position boundary'):
@@ -75,6 +95,62 @@ class ServingContextTests(unittest.TestCase):
         source=Path(launch.__file__).read_text()
         self.assertNotIn('tools/validation',source)
         self.assertNotIn('benchmark-module',source)
+
+    def test_framework_boot_does_not_require_executor_artifacts(self):
+        from gaudi_kernels.serving import bootstrap, bootstrap_hooks
+        with tempfile.TemporaryDirectory() as folder:
+            document = self.document(folder)
+            document['selection']['engine']['runtime']['executor'] = 'pytorch'
+            ctx = runtime.initialize(document, directory=folder)
+            with patch.object(bootstrap, 'load_manifest', return_value=ctx), \
+                 patch.dict('os.environ', {'GK_RUNTIME_MANIFEST': 'fixture.json'}), \
+                 patch.object(bootstrap_hooks, 'install') as install:
+                self.assertIs(bootstrap.start(), ctx)
+                install.assert_called_once_with()
+            self.assertFalse(hasattr(ctx, 'native'))
+
+    def test_production_boot_rejects_reduced_model_before_registration(self):
+        from gaudi_kernels.serving import bootstrap, bootstrap_hooks
+        ctx = SimpleNamespace(startup=SimpleNamespace(layers=2))
+        with patch.object(bootstrap, 'load_manifest', return_value=ctx), \
+                patch.dict('os.environ', {'GK_RUNTIME_MANIFEST': 'fixture.json'}), \
+                patch.object(bootstrap_hooks, 'install') as install:
+            with self.assertRaisesRegex(ValueError, 'all 70 layers'):
+                bootstrap.start()
+            install.assert_not_called()
+
+    def test_production_launch_rejects_reduced_model_before_creating_run_directory(self):
+        from gaudi_kernels.serving import launch
+        with tempfile.TemporaryDirectory() as folder:
+            manifest = Path(folder) / 'manifest.json'
+            manifest.write_text('{}')
+            run = Path(folder) / 'must-not-create'
+            ctx = SimpleNamespace(startup=SimpleNamespace(layers=2, run_dir=run))
+            with patch.object(launch, 'load_manifest', return_value=ctx):
+                with self.assertRaisesRegex(ValueError, 'all 70 layers'):
+                    launch.prepare_launch(manifest=manifest, plugin_source=Path(folder),
+                                          vllm_source=Path(folder), module='fixture')
+            self.assertFalse(run.exists())
+
+    def test_framework_launcher_keeps_kernels_without_preload(self):
+        from gaudi_kernels.serving import launch, host_placement
+        with tempfile.TemporaryDirectory() as folder:
+            document = self.document(folder)
+            document['selection']['engine']['runtime']['executor'] = 'pytorch'
+            ctx = runtime.initialize(document, directory=folder)
+            manifest = Path(folder)/'manifest.json'
+            manifest.write_text('{}')
+            placement = {'binding': 'none', 'workers': [{'module_id': i} for i in range(8)]}
+            with patch.object(launch, 'load_manifest', return_value=ctx), \
+                 patch.object(host_placement, 'prepare', return_value=placement), \
+                 patch.dict('os.environ', {'LD_PRELOAD': '/missing/old-executor.so'}), \
+                 patch.object(launch.os, 'execve') as execute:
+                launch.launch(manifest=manifest, plugin_source=Path(folder),
+                              vllm_source=Path(folder), module='fixture')
+            environment = execute.call_args.args[2]
+            self.assertNotIn('LD_PRELOAD', environment)
+            self.assertIn('GC_KERNEL_PATH', environment)
+            self.assertIn('GK_RUNTIME_MANIFEST', environment)
 
     def test_manifest_is_strict(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -116,8 +192,9 @@ class ServingContextTests(unittest.TestCase):
                 self.assertFalse(symbol.is_assigned() or symbol.is_parameter(),(path,table.get_name()))
             for child in table.get_children():check_symbols(child,path)
         for path in files:check_symbols(symtable.symtable(path.read_text(),str(path),'exec'),path)
-        for path in (root/'csrc/legacy_executor').iterdir():
-            self.assertNotIn('getenv(',path.read_text(),path)
+        self.assertFalse((root/'csrc/legacy_executor').exists())
+        self.assertFalse((root/'csrc/native_graph').exists())
+        self.assertFalse((root/'python/gaudi_kernels/graph.py').exists())
         self.assertFalse((root/'tools/consolidation/migrate_selection.py').exists())
 
 

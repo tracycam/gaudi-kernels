@@ -5,13 +5,10 @@ import sys
 
 
 def install():
-    from gaudi_kernels.serving.bootstrap_hooks import Finder
     class ReferenceFinder(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
             if fullname != 'vllm_gaudi.v1.worker.hpu_worker': return None
-            spec = Finder().find_spec(fullname, path, target)
-            if spec is None:
-                spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+            spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
             original = spec.loader
             class Loader(importlib.abc.Loader):
                 def create_module(self, module_spec): return original.create_module(module_spec)

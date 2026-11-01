@@ -48,3 +48,15 @@ class PlacementTests(unittest.TestCase):
                 module.WorkerProc.make_worker_process(None, 1)
             self.assertEqual(observed, ['0', '1'])
             self.assertEqual(os.environ['HLS_MODULE_ID'], 'parent')
+
+    def test_typed_chunk_reaches_vllm_kwargs(self):
+        from gaudi_kernels.serving.host_placement import vllm_kwargs
+        for chunk in (512,2048,4096):
+            config=EngineConfig.from_dict({'runtime':{'prefill_chunk_tokens':chunk}})
+            runtime=SimpleNamespace(selection=SimpleNamespace(engine=config))
+            with patch('gaudi_kernels.engine.context.context',return_value=runtime):
+                options=vllm_kwargs()
+            self.assertEqual(options['max_num_batched_tokens'],chunk)
+            self.assertTrue(options['enable_chunked_prefill'])
+        with self.assertRaises(ConfigError):
+            EngineConfig.from_dict({'runtime':{'prefill_chunk_tokens':8192}})

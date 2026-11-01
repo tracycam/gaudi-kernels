@@ -138,12 +138,12 @@ def linear_block_fp8(x, prepared, *, activation, scale_math='fp32', bias=None, r
     op = torch.ops.gaudi_block_fp8
     if activation == 'per_block_fp8':
         if row_tile is not None:
-            raise ValueError('row_tile is an explicit BF16 MME plan only')
+            raise ValueError('row_tile is only supported on the bf16 path; use bf16 for M > 16')
         if scale_math != 'fp32':
             raise ValueError('W8A8 block reduction uses FP32 scale arithmetic')
         q, sa = op.quant(x)
-        return linear_block_fp8_quantized(q, sa, prepared, bias=b, reduce_op=reduce_op,
-                                          audit_tensors=audit_tensors)
+        return linear_block_fp8_quantized(q, sa, prepared, bias=b,
+                                          reduce_op=reduce_op, audit_tensors=audit_tensors)
     if activation == 'bf16':
         if audit_tensors is not None:
             raise ValueError('staged FP32 audit applies only to explicit block A8')
@@ -156,7 +156,7 @@ def linear_block_fp8(x, prepared, *, activation, scale_math='fp32', bias=None, r
         decode = op.decode_fast if scale_math == 'bf16' else op.decode
         decoded = decode(prepared.weight, prepared.scales, prepared.k)
         if row_tile is not None:
-            if not isinstance(row_tile, int) or not 0 < row_tile < x.shape[0]:
+            if not isinstance(row_tile, int) or isinstance(row_tile, bool) or not 0 < row_tile < x.shape[0]:
                 raise ValueError('row_tile must split the known nonempty row shape')
             # One graph-local decoded tensor is shared. The compiler may clone
             # its producer; an actual graph audit must reject amplified weight
@@ -168,14 +168,14 @@ def linear_block_fp8(x, prepared, *, activation, scale_math='fp32', bias=None, r
     raise ValueError('activation must explicitly be bf16 or per_block_fp8')
 
 
-def linear_block_fp8_quantized(q_native, activation_scales, prepared, bias=None, *, reduce_op=None,
-                               audit_tensors=None):
+def linear_block_fp8_quantized(q_native, activation_scales, prepared, bias=None, *,
+                               reduce_op=None, audit_tensors=None):
     """Consume an already block-quantized activation, e.g. fused residual norm.
 
     q_native is native half-range FP8 [G,M,128]. FP32 scales are compensated by
-    2 and have shape [G,M,1] (or [G,M], reshaped as a logical view). G=ceil(K/128).
-    Quantization must have the same block128 OCP amax/448/RNE contract as quant;
-    K-tail lanes must be zero. This entry never quantizes again.
+    2 and have shape [G,M,1] (or [G,M]). G=ceil(K/128). Admitted only for small
+    M (M <= 16) where [G, M, N] FP32 partial sums fit in Gaudi2's 48 MiB SRAM;
+    M > 16 routes through the W8A16 bf16 path with in-register MME accumulation.
     """
     import torch
     if not isinstance(prepared, PreparedBlockFP8):
@@ -183,16 +183,17 @@ def linear_block_fp8_quantized(q_native, activation_scales, prepared, bias=None,
     prepared.validate()
     if activation_scales.ndim == 2:
         activation_scales = activation_scales.unsqueeze(-1)
+    g = (prepared.k + 127) // 128
     if (q_native.dtype != torch.float8_e4m3fn or q_native.ndim != 3
-            or q_native.shape[0] != (prepared.k+127)//128 or q_native.shape[2] != 128
+            or q_native.shape[0] != g or q_native.shape[2] != 128
             or activation_scales.dtype != torch.float32
-            or tuple(activation_scales.shape) != (*q_native.shape[:2], 1)
+            or tuple(activation_scales.shape) != (g, q_native.shape[1], 1)
             or q_native.device != prepared.weight.device
             or activation_scales.device != q_native.device):
         raise ValueError('native block128 activation/scale layout or device mismatch')
-    p = torch.ops.gaudi_block_fp8.batch_mm(q_native, prepared.weight)
     reducer = torch.ops.gaudi_block_fp8.reduce if reduce_op is None else reduce_op
     b = prepared.bias if bias is None else bias
+    p = torch.ops.gaudi_block_fp8.batch_mm(q_native, prepared.weight)
     y = reducer(p, activation_scales, prepared.scales, b)
     if audit_tensors is not None:
         # Diagnostic owner only. No readback, graph break or stream operation

@@ -19,7 +19,7 @@ class BatchCaptureTests(unittest.TestCase):
             ctx=SimpleNamespace(native=SimpleNamespace(active=False),
                 startup=SimpleNamespace(run_dir=root,same_input_audit=False,layer_diagnostics=False),has=lambda _:False)
             workers=[SimpleNamespace(rank=r,model_runner=SimpleNamespace(
-                _native_transfers=SimpleNamespace(audit_inputs=None))) for r in range(8)]
+                _input_audit=SimpleNamespace(audit_inputs=None))) for r in range(8)]
             with patch.dict(sys.modules,modules), patch.object(torch,'hpu',SimpleNamespace(synchronize=lambda:None),create=True), \
                  patch.object(production_quality,'execution_context',lambda:ctx):
                 for w in workers:

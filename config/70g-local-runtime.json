@@ -52,7 +52,7 @@
     }
   },
   "runtime": {
-    "executor": "legacy_native",
+    "executor": "pytorch",
     "flights": 1,
     "graph_layer_interval": 70,
     "buckets": {
@@ -75,7 +75,8 @@
         6,
         7
       ]
-    }
+    },
+    "runner": "native"
   },
   "diagnostics": {
     "profile": false,

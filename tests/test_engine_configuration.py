@@ -17,6 +17,17 @@ class ConfigurationTests(unittest.TestCase):
             'router_post_vector+norm_fp32+moe_compact8+moe_sum_bf16+norm_qkv_grid24')
         self.assertEqual(PolicySelection(EngineConfig()).label, expected)
 
+    def test_framework_execution_rejects_external_replay_flags(self):
+        cfg = EngineConfig.from_dict({'runtime': {'executor': 'pytorch'}})
+        self.assertEqual(cfg.runtime.executor, 'pytorch')
+        cfg = EngineConfig.from_dict({'runtime': {'executor': 'pytorch',
+            'buckets': {'batch': [1, 2, 8], 'tokens': [1, 4]}}})
+        self.assertEqual(DispatchTable(cfg).runtime_admission(), 'pytorch')
+        for setting in ('native_enabled', 'batch_replay'):
+            with self.assertRaises(ConfigError):
+                EngineConfig.from_dict({'runtime': {'executor': 'pytorch',
+                                                    'runner': 'native', setting: True}})
+
     def test_unknown_fields_and_scalar_types_fail(self):
         for document in ({'surprise': True}, {'decode': {'qkv': {'imlp': 'typo'}}},
                          {'parallel': {'tp': True}}, {'runtime': {'flights': '4'}},
@@ -24,6 +35,14 @@ class ConfigurationTests(unittest.TestCase):
                          {'runtime': {'buckets': {'batch': [True]}}}):
             with self.subTest(document=document), self.assertRaises(ConfigError):
                 EngineConfig.from_dict(document)
+
+    def test_global_mme_limits_are_typed_and_bounded(self):
+        for fields in ({'grouped_slot_budget': True}, {'grouped_slot_budget': -1},
+                       {'grouped_slot_budget': 1537}, {'grouped_min_mme_rows': 0},
+                       {'grouped_min_mme_rows': '8'}, {'grouped_padded_row_budget': True},
+                       {'grouped_padded_row_budget': -1}, {'grouped_padded_row_budget': 131073}):
+            with self.subTest(fields=fields), self.assertRaises(ConfigError):
+                EngineConfig.from_dict({'decode': {'moe': {'dispatch': fields}}})
 
     def test_duplicate_json_fields_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -83,8 +102,11 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(table.resolve(Request('qkv',17,3392,6144)).activation,'bf16')
         self.assertEqual(cfg.decode.qkv.post_max_rows,1)
         self.assertEqual(EngineConfig.from_dict({'decode':{'qkv':{'post_max_rows':16}}}).decode.qkv.post_max_rows,16)
+        self.assertEqual(EngineConfig.from_dict({'decode':{'qkv':{'post_max_rows':4096}}}).decode.qkv.post_max_rows,4096)
         with self.assertRaises(ConfigError):
-            EngineConfig.from_dict({'decode':{'qkv':{'post_max_rows':32}}})
+            EngineConfig.from_dict({'decode':{'qkv':{'a8_max_rows':17}}})
+        with self.assertRaises(ConfigError):
+            EngineConfig.from_dict({'decode':{'qkv':{'post_max_rows':32768}}})
 
     def test_compact_row_set_can_preserve_b2_broadcast(self):
         config = EngineConfig.from_dict({'decode': {'moe': {'dispatch': {'compact_rows': [1, 8]}}}})
@@ -94,22 +116,35 @@ class ConfigurationTests(unittest.TestCase):
         for rows in (2, 3, 4, 16, 512):
             self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.broadcast')
 
+    def test_grouped_shapes_are_explicit_and_preserve_small_batch(self):
+        cfg = EngineConfig.from_dict({'decode': {'moe': {'dispatch': {
+            'grouped_rows': [512, 2048, 4096]}}}})
+        table = DispatchTable(cfg)
+        for rows in (1, 2, 8):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.compact')
+        for rows in (16, 513, 1024):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.broadcast')
+        for rows in (512, 2048, 4096):
+            self.assertEqual(table.resolve(Request('moe_dispatch', rows)).name, 'mxfp4.grouped')
+        for rows in ([1], [512, 512], [32768], [True]):
+            with self.assertRaises(ConfigError):
+                EngineConfig.from_dict({'decode': {'moe': {'dispatch': {'grouped_rows': rows}}}})
+
     def test_unqualified_executor_or_native_batch_refused(self):
-        for runtime in ({'executor': 'native_graph'}, {'buckets': {'batch': [1, 2]}}):
-            with self.assertRaises(ValueError):
-                DispatchTable(EngineConfig.from_dict({'runtime': runtime})).runtime_admission()
+        self.assertEqual(DispatchTable(EngineConfig()).runtime_admission(), 'pytorch')
+        for runtime in ({'executor': 'native_graph'}, {'executor': 'legacy_native'},
+                        {'runner': 'legacy_hooks'}):
+            with self.assertRaises(ConfigError):
+                EngineConfig.from_dict({'runtime': runtime})
 
     def test_named_batch_requires_owned_runner_and_cannot_enable_verify(self):
-        with self.assertRaises(ConfigError):
-            EngineConfig.from_dict({'runtime':{'native_enabled':True}})
-        self.assertTrue(EngineConfig.from_dict({'runtime':{'runner':'native','native_enabled':True}}).runtime.native_enabled)
-        for runtime in ({'batch_replay': True},
+        for runtime in ({'native_enabled': True}, {'batch_replay': True},
                         {'runner':'native', 'batch_replay':True, 'buckets':{'tokens':[1,4]}}):
             with self.assertRaises(ConfigError):
                 EngineConfig.from_dict({'runtime':runtime})
-        cfg = EngineConfig.from_dict({'runtime':{'runner':'native','batch_replay':True,
+        cfg = EngineConfig.from_dict({'runtime':{'runner':'native',
                                                 'buckets':{'batch':[1,2,3]}}})
-        self.assertEqual(DispatchTable(cfg).runtime_admission(), 'legacy_native')
+        self.assertEqual(DispatchTable(cfg).runtime_admission(), 'pytorch')
 
     def test_workers_refuse_strategy_strings(self):
         with self.assertRaises(ConfigError):

@@ -278,5 +278,7 @@
   "recovered_device_report": "docs/RECOVERED-DEVICE-20260927.md",
   "submission_acceptance": "One observed Synapse API call per small compute-only replay does not qualify hardware single-launch or whole-token autonomy; HCL/SCAL/commands and ownership separate",
   "previous_first_principles_archive": "../instance-assets/kernel-first-principles-20260927",
-  "submission_evidence": "docs/GRAPH-SUBMISSION-20260927.md"
+  "submission_evidence": "docs/GRAPH-SUBMISSION-20260927.md",
+  "execution_owner": "PyTorch Gaudi bridge HPUGraph",
+  "retired_execution_sources": "tools/archive/legacy_execution (excluded from distributions)"
 }

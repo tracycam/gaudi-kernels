@@ -32,7 +32,7 @@ try:
             for mode,suffix in [('-c','.o'),('-S','.s')]:
                 meta['commands'].append([a.tpc_compiler,'-O2','-ffp-contract=off','-mcpu=gaudi2',*flags,mode,path,'-o',name+suffix])
             meta['commands'].append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',name+'.o',name+'_x86.o']);objects.append(name+'_x86.o')
-        meta['commands'].append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.include_dir,source('csrc/host/norm_grid24_glue.cpp'),*objects,'-o','libgaudi_norm_grid24_tpc.so'])
+        meta['commands'].append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.include_dir,source('csrc/host/norm_grid24_glue.cpp'),*objects,'-o','libgaudi_norm_grid24_tpc.so'])
         save()
         with (out/'build.log').open('w') as log:
             for command in meta['commands']:

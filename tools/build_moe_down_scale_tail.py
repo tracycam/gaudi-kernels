@@ -21,7 +21,7 @@ try:
  for stem in ('control','candidate'):
   run(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',stem+'.o',stem+'_x86.o'])
   with(out/(stem+'.dis')).open('w')as f:subprocess.run(['tpc-llvm-objdump','-d','--triple=tpc','--mcpu=gaudi2','--no-show-raw-insn',str(out/(stem+'.o'))],stdout=f,check=True,timeout=30)
- run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I/usr/lib/habanatools/include',root/'csrc/host/moe_down_scale_tail_glue.cpp','control_x86.o','candidate_x86.o','-o','libgaudi_down_scale_tail_tpc.so'])
+ run(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I/usr/lib/habanatools/include',root/'csrc/host/moe_down_scale_tail_glue.cpp','control_x86.o','candidate_x86.o','-o','libgaudi_down_scale_tail_tpc.so'])
  for stem in ('control','candidate'):assert embedded_elf((out/'libgaudi_down_scale_tail_tpc.so').read_bytes(),stem)==(out/(stem+'.o')).read_bytes()
  run(['g++','-O2','-std=c++17','-ffp-contract=off','-I/usr/lib/habanatools/include',root/'benchmarks/moe_down_scale_tail/simulator.cpp','-L/usr/lib/habanatools','-Wl,-rpath,/usr/lib/habanatools','-ltpc_tests_core_ext','-ldl','-o','simulator'])
  if a.torch:

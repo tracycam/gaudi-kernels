@@ -39,6 +39,6 @@ class PolicySelection:
     def block_policy(self):
         if self.reference != 'device':
             return self.reference
-        if self.engine.decode.qkv.a8_max_rows == 16:
+        if self.engine.decode.qkv.a8_max_rows > 1:
             return 'small_batch_a8_bf16_fp32'
         return 'decode_a8_bf16_fp32' if self.engine.decode.qkv.impl == 'block_fp8_mixed' else 'bf16_fp32'

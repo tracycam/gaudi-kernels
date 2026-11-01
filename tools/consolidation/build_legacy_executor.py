@@ -9,7 +9,7 @@ if __name__ == '__main__':
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--sdk-include',type=Path,default=Path('/usr/include/habanalabs'))
     a=p.parse_args();a.out.parent.mkdir(parents=True,exist_ok=True)
-    source=Path(__file__).resolve().parents[2]/'csrc/legacy_executor/e1_replay.cpp'
+    source=Path(__file__).resolve().parents[2]/'tools/archive/legacy_execution/csrc/legacy_executor/e1_replay.cpp'
     command=['g++','-std=c++17','-O2','-shared','-fPIC','-pthread',
              '-I'+str(a.sdk_include),str(source),'-ldl','-o',str(a.out)]
     subprocess.run(command,check=True)

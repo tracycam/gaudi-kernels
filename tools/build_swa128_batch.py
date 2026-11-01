@@ -9,7 +9,7 @@ for name in names:
  source=root/'csrc/tpc/swa128_attention'/f'{name}.c'
  commands.extend([['tpc-clang','-O2','-ffp-contract=off','-mcpu=gaudi2',kind,str(source),'-o',name+'.'+suffix]for kind,suffix in (('-c','o'),('-S','s'))])
  commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',name+'.o',name+'_x86.o'])
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I/usr/lib/habanatools/include',str(root/'csrc/host/swa128_batch_glue.cpp'),*[name+'_x86.o'for name in names],'-o','libgaudi_swa128_batch_tpc.so'])
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I/usr/lib/habanatools/include',str(root/'csrc/host/swa128_batch_glue.cpp'),*[name+'_x86.o'for name in names],'-o','libgaudi_swa128_batch_tpc.so'])
 identity=json.loads((root/'source-identity.json').read_text())if(root/'source-identity.json').exists()else {'git_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()}
 meta=dict(source_commit=identity['git_commit'],commands=commands,status='BUILDING',device_verified=False)
 try:

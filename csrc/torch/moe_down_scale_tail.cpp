@@ -2,6 +2,7 @@
 #include <ATen/ATen.h>
 #include <torch/library.h>
 #include <hpu_custom_op_pt2.h>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 using T=at::Tensor;using Meta=habana::PartialOutputMetaDataVector;
@@ -11,7 +12,7 @@ Meta meta(const at::Stack&s){
  TORCH_CHECK(device.type()==at::kHPU||device.type()==at::kMeta,"HPU/Meta only");
  for(const auto&v:s){auto t=v.toTensor();TORCH_CHECK(t.device()==device&&t.dim()==2&&t.is_contiguous()&&!t.requires_grad(),"contiguous same-device rank2 inference inputs required");}
  const char*flag=std::getenv("PT_ENABLE_INT64_SUPPORT");bool logicalLong=ids.scalar_type()==at::kLong&&device.type()==at::kHPU&&flag&&!std::strcmp(flag,"0");
- TORCH_CHECK((ids.scalar_type()==at::kInt||logicalLong)&&ids.size(0)>=1&&ids.size(0)<=8&&ids.size(1)==8,"experimental down supports T1..8 top8 only");
+ TORCH_CHECK((ids.scalar_type()==at::kInt||logicalLong)&&ids.size(0)>=1&&ids.size(1)>=1&&ids.size(1)<=384&&ids.numel()<=INT_MAX/6144,"down route domain");
  auto slots=ids.numel();auto e=w.size(0)/3072;
  TORCH_CHECK(w.scalar_type()==at::kByte&&w.size(1)==256&&e>=1&&e<=384&&w.size(0)==e*3072,"original HistoricalN512 down byte geometry required");
  TORCH_CHECK(sc.scalar_type()==at::kByte&&sc.size(0)==e*96&&sc.size(1)==512,"original E8M0 geometry required");

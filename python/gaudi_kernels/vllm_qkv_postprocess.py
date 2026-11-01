@@ -103,7 +103,7 @@ def _postprocess_with_sdk_hooks(rope,qkv,positions,scale,pair):
 def set_qkv_postprocess_policy(policy,*,attention_scope='swa128',max_rows=1):
     """Caller must synchronize and invalidate/rebuild existing captured graphs."""
     global _POLICY,_ATTENTION_SCOPE,_PREPARED_ATTENTION_COUNTS,_MAX_ROWS
-    if type(max_rows) is not int or max_rows not in (1,16):raise ValueError('unknown QKV postprocess row capacity')
+    if type(max_rows) is not int or not 1<=max_rows<=16384:raise ValueError('unknown QKV postprocess row capacity')
     if attention_scope not in ('swa128','swa128_or_full'):raise ValueError('unknown QKV attention scope')
     if policy not in _COUNTS:raise ValueError('QKV postprocess policy must be vendor or fused')
     if policy=='fused' and not hasattr(torch.ops.gaudi_kernels,'_qkv_post_cache_bf16_v2'):
@@ -167,7 +167,11 @@ def _static_reason(module):
     if not getattr(attn,'use_direct_call',False):return 'attention_indirect_call'
     if getattr(attn,'query_quant',None) is not None:return 'query_quantization'
     impl=getattr(attn,'impl',None)
-    if type(impl) not in (_IMPL,_DIFF_IMPL):return 'attention_impl_class'
+    packed_backend=sys.modules.get('gaudi_kernels.serving.packed_backend')
+    packed_impl=getattr(packed_backend,'PackedDiffKVImpl',None)
+    if type(impl) not in (_IMPL,_DIFF_IMPL,packed_impl):return 'attention_impl_class'
+    if type(impl) is packed_impl and ('forward' in impl.__dict__ or
+            packed_impl.forward is not packed_backend.QUALIFIED_PACKED_FORWARD):return 'packed_forward_override'
     if type(impl) is _DIFF_IMPL and _DIFF_IMPL.forward is not _IMPL.forward:return 'diffkv_forward_override'
     window=getattr(impl,'sliding_window','missing')
     if window!=128 and not (_ATTENTION_SCOPE=='swa128_or_full' and window is None):return 'attention_sliding_window'

@@ -55,18 +55,27 @@ def install(module):
         original = module.HpuCommunicator.all_reduce
 
         def reduce(self, x):
+            transport = getattr(self, 'rank_gather_transport', None)
+            def fallback(value):
+                if transport is not None and value.dtype == torch.float32:
+                    hc.mark_step()
+                    return transport.all_reduce_float32(value)
+                return original(self, value)
             policy = execution_context().collective_mode
             max_rows = execution_context().selection.engine.decode.tp_reduce.fp32_max_rows
             max_bytes = execution_context().selection.engine.decode.tp_reduce.fp32_max_bytes
             if policy == 'off' or x.dtype not in (torch.bfloat16, torch.float32):
-                return original(self, x)
-            gather = policy == 'gather' or (policy in ('auto', 'auto_fp32') and x.dtype == torch.bfloat16 and (x.numel() * x.element_size() <= 128 * 1024)) or (policy == 'auto_fp32' and x.dtype == torch.float32 and x.ndim == 2 and x.shape[1] == 6144 and 1 <= x.shape[0] <= max_rows and x.numel() * x.element_size() <= max_bytes)
+                return fallback(x)
+            gather = policy == 'gather' or (policy in ('auto', 'auto_fp32') and x.dtype == torch.bfloat16 and (x.numel() * x.element_size() <= 128 * 1024)) or (policy == 'auto_fp32' and x.dtype == torch.float32 and x.ndim == 2 and x.shape[1] > 0 and x.shape[1] % 128 == 0 and 1 <= x.shape[0] <= max_rows and x.numel() * x.element_size() <= max_bytes)
             if gather and x.ndim == 2 and (x.shape[1] % 128 == 0):
                 hit('bf16_gather_f32_sum' if x.dtype == torch.bfloat16 else 'f32_gather_f32_sum')
                 import torch.distributed as dist
                 g = torch.empty((x.shape[0] * self.world_size, x.shape[1]), dtype=x.dtype, device=x.device)
                 hc.mark_step()
-                dist.all_gather_into_tensor(g, x, group=self.device_group)
+                if transport is None:
+                    dist.all_gather_into_tensor(g, x, group=self.device_group)
+                else:
+                    transport.all_gather_into_tensor(g, x)
                 from gaudi_kernels.serving.executor.moe_sum_bf16_runtime import select_bf16_output
                 final_bf16 = x.dtype == torch.float32 and select_bf16_output(x, self.world_size)
                 if final_bf16:
@@ -74,6 +83,6 @@ def install(module):
                 return precision_ops.sum_ranks(g, self.world_size, x.dtype == torch.bfloat16 or final_bf16)
             if x.dtype == torch.bfloat16:
                 hit('promoted_f32_all_reduce')
-                return original(self, x.float()).to(x.dtype)
-            return original(self, x)
+                return fallback(x.float()).to(x.dtype)
+            return fallback(x)
         module.HpuCommunicator.all_reduce = reduce

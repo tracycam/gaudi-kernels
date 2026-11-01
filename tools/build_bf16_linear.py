@@ -20,7 +20,7 @@ for unroll in [0,1]:
 for name,filename,flags in variants:
  for flag,suffix in [('-c','.o'),('-S','.s')]:commands.append([a.tpc_compiler,'-O2','-ffp-contract=off','-mcpu=gaudi2',*flags,flag,str(source/filename),'-o',name+suffix])
  commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',name+'.o',name+'_x86.o']);objects.append(name+'_x86.o')
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.include_dir,str(root/'csrc/host/bf16_linear_glue.cpp'),*objects,'-o','libgaudi_bf16_linear_tpc.so'])
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.include_dir,str(root/'csrc/host/bf16_linear_glue.cpp'),*objects,'-o','libgaudi_bf16_linear_tpc.so'])
 commands.append(['g++','-O2','-std=c++17','-fPIC','-I'+a.include_dir,'-c',str(root/'csrc/ops/bf16_linear.cpp'),'-o','bf16_linear.o'])
 commands.append(['ar','rcs','libgaudi_bf16_linear.a','bf16_linear.o'])
 commands.append(['g++','-O2','-std=c++17','-I'+a.include_dir,str(root/'benchmarks/bf16_linear/native.cpp'),'libgaudi_bf16_linear.a','-L/usr/lib/habanalabs','-lSynapse','-o','bf16_linear_benchmark'])

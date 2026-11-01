@@ -16,9 +16,9 @@ for name in ['decode','gemv','bias','reduce']:
         commands.append([a.tpc_compiler,'-O2','-ffp-contract=off','-mcpu=gaudi2',*defines,flag,str(src),'-o',target+suffix])
     commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',target+'.o',target+'_x86.o'])
     objects.append(target+'_x86.o')
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.include_dir,
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.include_dir,
                  str(root/'csrc/host/mxfp4_linear_glue.cpp'),*objects,'-o','libgaudi_mxfp4_linear_tpc.so'])
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.include_dir,
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.include_dir,
                  str(root/'csrc/ops/mxfp4_linear.cpp'),'-L/usr/lib/habanalabs','-Wl,-rpath,/usr/lib/habanalabs','-lSynapse','-o','libgaudi_mxfp4_linear.so'])
 commands.append(['g++','-O3','-std=c++17','-I'+a.include_dir,str(root/'benchmarks/mxfp4_linear/probe.cpp'),
                  '-L.','-Wl,-rpath,$ORIGIN','-lgaudi_mxfp4_linear','-L/usr/lib/habanalabs','-Wl,-rpath,/usr/lib/habanalabs','-lSynapse','-o','mxfp4_probe'])

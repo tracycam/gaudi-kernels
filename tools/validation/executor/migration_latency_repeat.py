@@ -10,7 +10,7 @@ from gaudi_kernels.engine.context import context as execution_context
 from gaudi_kernels.engine.selection import PolicySelection
 from gaudi_kernels.serving.diagnostics.host_clock import clock_domain
 from tools.consolidation.analyze_latency_repeat import analyze
-from tools.validation.executor.native_service_test import install_step_timer
+from tools.validation.executor.step_timing import install_step_timer
 
 
 def main():
@@ -60,7 +60,7 @@ def main():
     try:
         begin = time.monotonic()
         from gaudi_kernels.serving.host_placement import vllm_kwargs
-        model_config = dict(qualified['config']) | vllm_kwargs()
+        model_config = dict(qualified['config']) | vllm_kwargs(diagnostics=True)
         result['config'] = model_config
         llm = LLM(**model_config)
         result['init_s'] = time.monotonic()-begin

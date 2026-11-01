@@ -6,6 +6,5 @@ recursive-include docs *.md
 recursive-include config *.json
 recursive-include tools *.py *.cpp *.patch
 recursive-include tests *.py
-recursive-include benchmarks *.py *.c *.cpp *.h *.hpp *.s *.md *.json
 recursive-include integrations *.md *.patch
 global-exclude *.pyc *.o *.so __pycache__

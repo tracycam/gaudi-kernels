@@ -27,3 +27,27 @@ readiness. This repository does not republish the private business corpus.
 Apache-2.0 was selected for the public project. Third-party code retains its
 original attribution and licensing; project licensing does not relicense the
 Gaudi SDK, runtime, model weights, or separately installed dependencies.
+
+---
+
+## Phase 4.2 kernel bundle & safe-math update (2026-10-31)
+
+This update exports verified kernel snapshot `d23e585` (`Add compensated QKV
+midpoint rounding for model TPC bundle`), paired with the companion
+zero-legacy-bridge C++ runtime repository
+[`tracycam/GaudiRT`](https://github.com/tracycam/GaudiRT) (`8fc3b3b`):
+
+- **Hardware-safe TPC special functions (`csrc/tpc/common/tpc_math_safe.h`)**:
+  exact 3-instruction piecewise linear-interpolation workaround for the 750
+  `v_exp_f32` LUT boundary discontinuities discovered on Gaudi2 TPC hardware.
+- **Compensated QKV BF16 midpoint rounding (`csrc/tpc/block_fp8_reduce_isa/round_bf16_compensated.c`)**:
+  Neumaier-compensated Block-FP8 reduction rounding that eliminates double-rounding
+  bias at BF16 midpoints during 70-layer prefill and decode.
+- **Consolidated TPC provider bundles (`csrc/host/mimo_device_bundle_glue.cpp`, `csrc/host/mimo_prefill_bundle.cpp`)**:
+  merges custom decode and `M=32` prefill TPC kernels within Synapse's per-process
+  `GC_KERNEL_PATH` shared-library ceiling.
+- **Device-resident token step kernels (`csrc/tpc/mimo_step/`, `csrc/tpc/dense_prefill/`, `csrc/tpc/moe_prefill/`, `csrc/tpc/full_mme_attention/`)**:
+  `M=32` static-chunk prefill kernels, device embedding, and greedy argmax kernels.
+
+Dated internal machine/NIC operational notes and out-of-tree raw benchmark
+receipts remain omitted in accordance with project sanitization rules.

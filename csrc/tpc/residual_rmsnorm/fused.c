@@ -50,17 +50,34 @@ void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor norm_
    int count=s_i32_min(width-k,128)-1;
    bfloat128 a=v_bf16_ld_tnsr_partial_b(p,x,(char)count,0);
    bfloat128 b=v_bf16_ld_tnsr_partial_b(p,residual,(char)count,0);
+#if QUANT_POLICY == 0
+   float128 af=v_convert_bf16_to_f32_all_b(a);
+   float128 bf=v_convert_bf16_to_f32_all_b(b);
+   float128 rf={af.v1+bf.v1,af.v2+bf.v2};
+   bfloat128 r=convert_float128_to_bfloat128(rf,SW_RHNE);
+   saved[k/128]=a;
+   v_bf16_st_tnsr_partial(p,residual_out,r,(char)count,0);
+   ss.v1=v_f32_mac_b(rf.v1,rf.v1,ss.v1);
+   ss.v2=v_f32_mac_b(rf.v2,rf.v2,ss.v2);
+#else
    bfloat128 r=a+b;
    saved[k/128]=r;
    v_bf16_st_tnsr_partial(p,residual_out,r,(char)count,0);
    ss=v_bf16_mac_acc32_b(r,r,ss);
+#endif
   }
   float64 sum=v_f32_reduce_add(ss.v1+ss.v2);
   float64 inverse=v_rsqrt_f32(sum*(1.0f/(float)width)+epsilon);
   for(int k=0;k<width;k+=128){
    int5 p={k,row,0,0,0},g={k,0,0,0,0};
    int count=s_i32_min(width-k,128)-1;
+#if QUANT_POLICY == 0
+   float128 af=v_convert_bf16_to_f32_all_b(saved[k/128]);
+   float128 bf=v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(p,residual,(char)count,0));
+   float128 r={af.v1+bf.v1,af.v2+bf.v2};
+#else
    float128 r=v_convert_bf16_to_f32_all_b(saved[k/128]);
+#endif
    float128 w=v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(g,gamma,(char)count,0));
    float128 y={r.v1*inverse*w.v1,r.v2*inverse*w.v2};
    bfloat128 result=convert_float128_to_bfloat128(y,SW_RHNE);

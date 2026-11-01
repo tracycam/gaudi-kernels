@@ -90,7 +90,8 @@ if not available:
 env=dict(os.environ)
 for key in ['LD_PRELOAD','PYTHONPATH','HABANA_PROFILE','HABANA_PROF_CONFIG']:
     env.pop(key,None)
-env.update(HABANA_VISIBLE_MODULES=str(a.module),GAUDI_KERNELS_MODULE_ID=str(a.module),
+env.update(HABANA_VISIBLE_MODULES=str(a.module),HLS_MODULE_ID=str(a.module),
+    GAUDI_KERNELS_MODULE_ID=str(a.module),GAUDI_KERNELS_BUS_ID=row[2].strip(),
     KERNEL_PROBE_OUT=str(out),PROBE_OUT=str(out),HABANA_LOGS=str(out/'habana-logs'),
     PT_HPU_LAZY_MODE='1',PT_HPU_LAZY_ACC_PAR_MODE='0',OMP_NUM_THREADS='4',MKL_NUM_THREADS='4',
     GC_KERNEL_PATH='/usr/lib/habanalabs/libtpc_kernels.so')
@@ -112,6 +113,8 @@ for value in command:
             if preload.is_relative_to(root) and preload.is_file():
                 command_files[str(preload.relative_to(root))]=hashlib.sha256(preload.read_bytes()).hexdigest()
 metadata={'module':a.module,'index':int(row[1]),'bus_id':row[2].strip(),'git_commit':a.git_commit,
+    'device_selection':{'HLS_MODULE_ID':env['HLS_MODULE_ID'],
+                        'HABANA_VISIBLE_MODULES':env['HABANA_VISIBLE_MODULES']},
     'stage':'device_command','kernel_launched':False,'device_command_started':False,
     'launch_field_scope':'kernel_launched records payload start, not proof of a device launch',
     'command':command,'script_sha256':sources,'kernel_libraries_sha256':libraries,

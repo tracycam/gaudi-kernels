@@ -4,7 +4,7 @@ Only bootstrap reads a manifest location from the environment. Capture and
 replay use these typed objects; changing arithmetic requires a drained runner.
 This module imports neither Torch nor vLLM.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -13,12 +13,18 @@ from types import MappingProxyType
 from .config import ConfigError
 from .selection import PolicySelection
 from .artifact_pins import PINS
+from .elf_stack import matches_noexecstack_variant
 
 
 @dataclass(frozen=True)
 class Artifact:
     path: Path
     sha256: str
+
+    def qualifies(self, expected):
+        if isinstance(expected, (tuple, list, set, frozenset)):
+            return any(self.qualifies(item) for item in expected)
+        return self.sha256 == expected or matches_noexecstack_variant(self.path.read_bytes(), expected)
 
     def verify(self):
         digest = hashlib.sha256()
@@ -42,21 +48,10 @@ class Startup:
 
 
 @dataclass
-class NativeState:
-    active: bool = False
-    single_rpc: bool = False
-    reuse_pages: bool = False
-    pad_window: bool = True
-    boundary_positions: tuple[int, ...] = ()
-    replay_mode: str = 'compact'
-
-
-@dataclass
 class ExecutionContext:
     startup: Startup
     artifacts: object
     selection: PolicySelection
-    native: NativeState = field(default_factory=NativeState)
     # This is the qualified 70-g collective shape policy, not a universal AG.
     collective_mode: str = 'auto'
 
@@ -79,7 +74,7 @@ class ExecutionContext:
         result = {}
         for kind in ('tpc', 'torch'):
             artifact = self.artifact(name, kind).verify()
-            if qualified is not None and artifact.sha256 != qualified[kind]:
+            if qualified is not None and not artifact.qualifies(qualified[kind]):
                 raise ConfigError('Unqualified artifact: ' + name + '.' + kind)
             result[kind] = {'path': str(artifact.path), 'sha256': artifact.sha256}
         # GC_KERNEL_PATH is an SDK input; actual registration is checked at
@@ -111,8 +106,8 @@ def initialize(document, *, directory):
         raise ConfigError('Unknown/missing startup setting')
     if type(startup['run_dir']) is not str:
         raise ConfigError('startup.run_dir must be a path string')
-    if type(startup.get('layers', 70)) is not int or not 1 <= startup.get('layers', 70) <= 70:
-        raise ConfigError('startup.layers must be 1..70; partial layers are diagnostic only')
+    if type(startup.get('layers', 70)) is not int or not 1 <= startup.get('layers', 70) <= 1024:
+        raise ConfigError('startup.layers must be 1..1024; partial layers are diagnostic only')
     for name in ('keep_cpu_oracle', 'layer_diagnostics', 'same_input_audit', 'inventory'):
         if type(startup.get(name, False)) is not bool:
             raise ConfigError('startup.' + name + ' must be bool')
@@ -127,6 +122,8 @@ def initialize(document, *, directory):
     if type(document['artifacts']) is not dict or not document['artifacts']:
         raise ConfigError('No explicit artifact bindings')
     for name, binding in document['artifacts'].items():
+        if name in ('replay.host', 'tensor_hold.host', 'batch_replay.host', 'native_graph.host'):
+            raise ConfigError('Retired execution artifact: ' + name)
         if type(name) is not str or name.count('.') != 1 or name.rsplit('.', 1)[1] not in ('torch', 'tpc', 'host'):
             raise ConfigError('Artifact name must be group.torch/tpc/host')
         if type(binding) is not dict or set(binding) != {'path', 'sha256'}:
@@ -135,14 +132,24 @@ def initialize(document, *, directory):
             raise ConfigError('Artifact path/hash must be strings')
         if len(binding['sha256']) != 64 or any(c not in '0123456789abcdef' for c in binding['sha256']):
             raise ConfigError('Artifact SHA256 must be lowercase hexadecimal')
-        if name.endswith(('.torch', '.tpc')) or name=='tensor_hold.host':
-            if name not in PINS or PINS[name]!=binding['sha256']:
-                raise ConfigError('Unqualified executable artifact: '+name)
         path = Path(binding['path'])
         if not path.is_absolute():
             path = base / path
         artifact = Artifact(path.resolve(strict=True), binding['sha256']).verify()
+        if name.endswith(('.torch', '.tpc')) or name in PINS:
+            if name not in PINS or not artifact.qualifies(PINS[name]):
+                raise ConfigError('Unqualified executable artifact: '+name)
         artifacts[name] = artifact
+    if 'moe_bundle.tpc' in artifacts:
+        if 'batch.tpc' in artifacts:
+            raise ConfigError('Batch provider cannot be registered twice')
+        directory = artifacts['moe_bundle.tpc'].path.parent
+        for key, filename in (('moe_batch_provider.host', 'provider_batch.so'),
+                              ('moe_expert_provider.host', 'provider_expert.so')):
+            if key not in artifacts or artifacts[key].path != directory / filename:
+                raise ConfigError('Missing or misplaced MoE provider: ' + key)
+    elif any(key in artifacts for key in ('expert.torch', 'moe_batch_provider.host', 'moe_expert_provider.host')):
+        raise ConfigError('Expert operators require their shared TPC database')
     candidate = ExecutionContext(Startup(**options), MappingProxyType(artifacts),
                                  PolicySelection.from_dict(document['selection']))
     _CONTEXT = candidate

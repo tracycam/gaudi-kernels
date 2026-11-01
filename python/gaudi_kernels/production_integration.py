@@ -55,6 +55,7 @@ class BlockFP8Installation:
         self.extension_sha256 = None
         self.generation = 0
         self.selected_layers = {}
+        self.selected_non_qkv_layers = {}
         self.python_apply_branch_counts = Counter()
         self.policy_history = []
         self.method_class = None
@@ -91,16 +92,13 @@ class BlockFP8Installation:
 
     def choose(self, layer, rows):
         prepared = layer._gk_block_fp8
-        # This is an explicit mixed-precision policy for the measured TP8 QKV
-        # decode shape, not a universal crossover threshold or a device-value
-        # branch. Other shapes preserve BF16 activation and FP32 scale math.
-        # Opt-in verification policy preserves the same block-A8 arithmetic
-        # across B*T<=16. It does not silently extend the partial-sum working
-        # set into large-M prefill; that requires a separately admitted plan.
         a8_rows = 16 if self.policy == 'small_batch_a8_bf16_fp32' else 1
+        shape_ok = (self.expected_qkv_shape is None and prepared.n > 0 and prepared.k > 0) or (
+            (prepared.n, prepared.k) == self.expected_qkv_shape
+        )
         if (self.policy in ('decode_a8_bf16_fp32', 'small_batch_a8_bf16_fp32')
                 and _qkv(layer) and 1 <= rows <= a8_rows
-                and (prepared.n, prepared.k) == (3392, 6144)):
+                and shape_ok):
             return 'per_block_fp8', 'fp32'
         return 'bf16', 'fp32'
 
@@ -135,23 +133,24 @@ class BlockFP8Installation:
                 'reduction_operator': {'sequential': 'gaudi_block_fp8::reduce',
                     'neumaier_fp32': 'gk_reduce_experiment::neumaier',
                     'neumaier_isa_fp32': 'gk_reduce_isa::handschedule'}[self.reduction_policy],
-                'selected_layer_count': len(self.selected_layers),
+                'selected_layer_count': len(self.selected_layers) or len(self.selected_non_qkv_layers),
                 'selected_layers': dict(self.selected_layers),
+                'selected_non_qkv_layer_count': len(self.selected_non_qkv_layers),
+                'selected_non_qkv_layers': dict(self.selected_non_qkv_layers),
                 'python_apply_branch_counts': dict(self.python_apply_branch_counts),
                 'count_scope': 'Python apply calls, including capture/warmup/eager; excludes cached graph replays',
                 'policy_history': list(self.policy_history)}
 
 
 def install_block_fp8(hpu_fp8_module, *, enabled=True, scope='qkv', policy='bf16_fp32',
-                     extension_path=None, expected_qkv_shape=(3392, 6144), keep_cpu_oracle=False):
+                     extension_path=None, expected_qkv_shape=None, keep_cpu_oracle=False):
     """Install after plugin import and before model construction/weight loading.
 
     Set GC_KERNEL_PATH to the block TPC database before any Habana import.
     extension_path loads the separate public bridge once; None requires that
-    its operators were already loaded. Default scope is QKV only, with the
-    measured MiMo TP8 local [3392,6144]/[27,48] shape checked before preparation.
-    Passing expected_qkv_shape=None explicitly admits other QKV dimensions to
-    the BF16 reference route; it does not qualify their performance or TP layout.
+    its operators were already loaded. Default scope is QKV with general
+    positive block128 dimensions (expected_qkv_shape=None), or an explicit
+    expected (N, K) tuple when pinning a specific checkpoint geometry.
     """
     global _active
     if not enabled:
@@ -222,7 +221,8 @@ def install_block_fp8(hpu_fp8_module, *, enabled=True, scope='qkv', policy='bf16
             del layer._gk_block_fp8_policy
             layer._gk_block_fp8_policy_owner = state
             prefix = getattr(layer, 'prefix', '<unknown>')
-            state.selected_layers[prefix] = {'shape': [prepared.n, prepared.k],
+            target = state.selected_layers if _qkv(layer) else state.selected_non_qkv_layers
+            target[prefix] = {'shape': [prepared.n, prepared.k],
                 'scales_shape': list(prepared.scales.shape), 'encoding': prepared.encoding,
                 'checkpoint_weight_sha256': prepared.checkpoint_weight_sha256,
                 'checkpoint_scales_sha256': prepared.checkpoint_scales_sha256,

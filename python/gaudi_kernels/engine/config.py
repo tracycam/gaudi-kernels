@@ -17,7 +17,7 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Parallel:
-    tp: Literal[8] = 8
+    tp: Literal[1, 2, 4, 8] = 8
     ep: Literal[1] = 1
 
 
@@ -25,12 +25,12 @@ class Parallel:
 class QKV:
     impl: Literal['block_fp8_mixed', 'block_fp8_a16'] = 'block_fp8_mixed'
     core: Literal['native_lanes_v1'] = 'native_lanes_v1'
-    # Default preserves the 70-g M1-only policy. The explicit value 16 selects
-    # the existing multirow contract; complete-model quality is a separate gate.
-    a8_max_rows: Literal[0, 1, 16] = 1
+    # Default preserves the 70-g M1-only policy. Explicit 1..16384 selects
+    # multirow or general-M block128 A8; complete-model quality is a separate gate.
+    a8_max_rows: int = 1
     reduce: Literal['sequential', 'neumaier_isa'] = 'neumaier_isa'
     post: Literal['vendor', 'fused_swa', 'fused_all'] = 'fused_swa'
-    post_max_rows: Literal[1, 16] = 1
+    post_max_rows: int = 1
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,11 @@ class MoEDispatch:
     # Explicit row set. The prior "max_rows=8" shorthand hid the B2
     # regression; compact-only B1/B8 has not passed a full-model gate yet.
     compact_rows: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8)
+    # Opt-in static shapes; per-expert ownership is determined on device.
+    grouped_rows: tuple[int, ...] = ()
+    grouped_min_mme_rows: int = 1
+    grouped_slot_budget: int = 0
+    grouped_padded_row_budget: int = 0
 
 
 @dataclass(frozen=True)
@@ -83,7 +88,7 @@ class MoE:
 @dataclass(frozen=True)
 class TPReduce:
     collective: Literal['baseline', 'all_gather_fp32_local_sum'] = 'all_gather_fp32_local_sum'
-    fp32_max_rows: Literal[1, 16] = 1
+    fp32_max_rows: int = 1
     fp32_max_bytes: Literal[131072, 524288] = 131072
 
 
@@ -106,21 +111,33 @@ class Buckets:
 class HostPlacement:
     numa_binding: Literal['none', 'local'] = 'none'
     visible_modules: tuple[int, ...] = tuple(range(8))
+    worker_util_min: int = 1024
+
+
+@dataclass(frozen=True)
+class Communication:
+    gather: Literal['direct', 'two_stage'] = 'direct'
+    local_groups: tuple[tuple[int, ...], ...] = ()
+    exchange_groups: tuple[tuple[int, ...], ...] = ()
 
 
 @dataclass(frozen=True)
 class Runtime:
-    # native_graph is admitted only by an explicit producer/runtime gate.
-    # Parsing its name must not turn the old recorder into a new executor.
-    executor: Literal['legacy_native', 'native_graph'] = 'legacy_native'
-    runner: Literal['legacy_hooks', 'native'] = 'legacy_hooks'
-    native_enabled: bool = False
-    batch_replay: bool = False
+    # One production execution owner. Historical executors live in tools/archive.
+    executor: Literal['pytorch'] = 'pytorch'
+    decode_graph: Literal['forward', 'step'] = 'forward'
+    runner: Literal['native'] = 'native'
+    # One-version manifest compatibility: false is accepted, enabling is not.
+    native_enabled: Literal[False] = False
+    batch_replay: Literal[False] = False
+    prefill_chunk_tokens: Literal[64, 128, 256, 512, 1024, 2048, 4096] = 512
     flights: int = 1
+    speculative_verify_rows: int = 0
     # SDK graph flush interval, NOT the number of model layers.
     graph_layer_interval: Literal[70] = 70
     buckets: Buckets = Buckets()
     host: HostPlacement = HostPlacement()
+    communication: Communication = Communication()
 
 
 @dataclass(frozen=True)
@@ -133,7 +150,7 @@ class Diagnostics:
 @dataclass(frozen=True)
 class EngineConfig:
     schema_version: Literal[1] = 1
-    model: Literal['mimo-v2.6-pro'] = 'mimo-v2.6-pro'
+    model: str = 'mimo-v2.6-pro'
     parallel: Parallel = Parallel()
     precision_contract: Literal['fp32_arithmetic_v1'] = 'fp32_arithmetic_v1'
     decode: Decode = Decode()
@@ -149,9 +166,18 @@ class EngineConfig:
     def validate(self):
         # Also validate direct Python construction, not only JSON loaders.
         _read(type(self), asdict(self), 'config')
+        if type(self.model) is not str or not self.model.strip():
+            raise ConfigError('model must be a non-empty string')
         d = self.decode
-        if (d.qkv.impl == 'block_fp8_a16') != (d.qkv.a8_max_rows == 0):
-            raise ConfigError('A16 QKV requires a8_max_rows=0; mixed QKV requires 1')
+        if d.qkv.impl == 'block_fp8_a16':
+            if d.qkv.a8_max_rows != 0:
+                raise ConfigError('A16 QKV requires a8_max_rows=0; mixed QKV requires 1..16')
+        elif not 1 <= d.qkv.a8_max_rows <= 16:
+            raise ConfigError('A16 QKV requires a8_max_rows=0; mixed QKV requires 1..16')
+        if not 1 <= d.qkv.post_max_rows <= 16384:
+            raise ConfigError('qkv.post_max_rows must be 1..16384')
+        if not 1 <= d.tp_reduce.fp32_max_rows <= 16384:
+            raise ConfigError('tp_reduce.fp32_max_rows must be 1..16384')
         if d.qkv.post != 'vendor' and d.attention.swa == 'vendor':
             raise ConfigError('Fused QKV post requires the explicit FP32 SWA consumer')
         if d.norm.impl == 'fp32_grid24_quant' and (
@@ -166,18 +192,37 @@ class EngineConfig:
             raise ConfigError('compact rows require qualified folded GP/vector down and rows <= 8')
         if compact not in ((), (1,), (1, 8), tuple(range(1, 9))):
             raise ConfigError('This migration admits only the implemented compact selector row sets')
+        grouped = d.moe.dispatch.grouped_rows
+        _rows(grouped, 'decode.moe.dispatch.grouped_rows', allow_empty=True)
+        if any(not 16 <= n <= 16384 for n in grouped):
+            raise ConfigError('Grouped MoE supports explicitly admitted large token shapes only')
+        if not 1 <= d.moe.dispatch.grouped_min_mme_rows <= 4096:
+            raise ConfigError('Grouped minimum expert rows must be 1..4096')
+        if not 0 <= d.moe.dispatch.grouped_slot_budget <= 1536:
+            raise ConfigError('Grouped total slot budget must be 0..1536')
+        if not 0 <= d.moe.dispatch.grouped_padded_row_budget <= 131072:
+            raise ConfigError('Grouped total padded row budget must be 0..131072')
         if not 1 <= self.runtime.flights <= 16:
             raise ConfigError('runtime.flights must be 1..16')
         _rows(self.runtime.buckets.batch, 'runtime.buckets.batch')
         _rows(self.runtime.buckets.tokens, 'runtime.buckets.tokens')
-        if self.runtime.batch_replay and (self.runtime.runner != 'native' or
-                self.runtime.executor != 'legacy_native' or self.runtime.buckets.tokens != (1,)):
-            raise ConfigError('Named batch replay requires the owned runner and T1; verify is not admitted yet')
-        if self.runtime.native_enabled and self.runtime.runner!='native':
-            raise ConfigError('Native serving startup requires the owned runner')
         modules = self.runtime.host.visible_modules
+        if self.runtime.speculative_verify_rows < 0:
+            raise ConfigError('runtime.speculative_verify_rows must be nonnegative; 0 selects fixed drafting')
+        if not 0 <= self.runtime.host.worker_util_min <= 1024:
+            raise ConfigError('runtime.host.worker_util_min must be 0..1024')
         if len(modules) != self.parallel.tp or len(set(modules)) != len(modules) or any(m < 0 for m in modules):
             raise ConfigError('runtime.host.visible_modules requires one distinct module per TP rank')
+        communication = self.runtime.communication
+        if communication.gather == 'direct':
+            if communication.local_groups or communication.exchange_groups:
+                raise ConfigError('Direct gather cannot have a two-stage layout')
+        else:
+            from gaudi_kernels.serving.distributed.rank_gather import GatherLayout
+            try:
+                GatherLayout(communication.local_groups, communication.exchange_groups).validate(range(self.parallel.tp))
+            except ValueError as error:
+                raise ConfigError('Invalid rank gather layout: '+str(error)) from error
 
     def to_dict(self):
         # Canonical JSON turns tuples into lists and detaches mutable data.

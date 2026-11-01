@@ -1,6 +1,8 @@
-// Offline candidate: four independent tokens; original KV owner/layout.
+// SPDX-License-Identifier: Apache-2.0
+// Four independent tokens; original KV owner/layout.
 #define WINDOW_METADATA 1
 #define AV_SHUFFLE 1
+#define AV_GROUP_HOIST 1
 #ifndef BATCH_WINDOW
 #define BATCH_WINDOW 0
 #endif
@@ -15,6 +17,7 @@
 #ifndef AV_SHUFFLE
 #define AV_SHUFFLE 0
 #endif
+#include "../common/tpc_math_safe.h"
 #if AV_SHUFFLE
 #define ALL_GROUPS (SW_WR_LOWER_GROUP0|SW_WR_UPPER_GROUP0|SW_WR_LOWER_GROUP1|SW_WR_UPPER_GROUP1|SW_WR_LOWER_GROUP2|SW_WR_UPPER_GROUP2|SW_WR_LOWER_GROUP3|SW_WR_UPPER_GROUP3)
 static inline float64 broadcast_probability(float64 source,int index){
@@ -136,8 +139,8 @@ void main(tensor query,tensor key,tensor value,tensor page_ids,
   }
   int5 hp={head,0,0,0,0};float64 sink=(float)s_bf16_ld_g(gen_addr(hp,sinks));
   float64 maximum=v_f32_max_b(v_f32_reduce_max(v_f32_max_b(score0,score1)),sink),origin=v_f32_sel_eq_f32_b(maximum,ni,0,maximum);
-  float64 p0=v_exp_f32(score0-origin),p1=v_exp_f32(score1-origin);p0=v_f32_sel_eq_f32_b(score0,ni,0,p0);p1=v_f32_sel_eq_f32_b(score1,ni,0,p1);
-  float64 sink_p=v_exp_f32(sink-origin);sink_p=v_f32_sel_eq_f32_b(sink,ni,0,sink_p);
+  float64 p0=tpc_exp_f32_safe(score0-origin),p1=tpc_exp_f32_safe(score1-origin);p0=v_f32_sel_eq_f32_b(score0,ni,0,p0);p1=v_f32_sel_eq_f32_b(score1,ni,0,p1);
+  float64 sink_p=tpc_exp_f32_safe(sink-origin);sink_p=v_f32_sel_eq_f32_b(sink,ni,0,sink_p);
   float64 denominator=v_f32_reduce_add(p0+p1)+sink_p;denominator=v_f32_sel_leq_f32_b(denominator,0,1,denominator);
   float128 sum={0,0};
   for(int page=0;page<2;++page){

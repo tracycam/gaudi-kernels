@@ -1,4 +1,4 @@
-# Measured development status — 2026-10-02
+# Measured development status — 2026-10-03
 
 These observations came from the local development system: a 70-layer MiMo
 model, Gaudi2 TP8, and separately qualified runtime artifacts. Raw private
@@ -15,7 +15,24 @@ benchmark or a general model-quality certification.
 | Fusion numerical check | 35 aligned full-logit queries bitwise equal; tested generated token sequences equal |
 | Multirow arithmetic vs prior policy | Maximum teacher-forced KL about 0.00422 (B2) and 0.00789 (B3); this comparison is not bitwise equality |
 | Native automatic startup | Two-layer TP8 check, 12 native steps per rank before benchmark enable RPC |
-| Full native MTP/DFlash cycle | Not complete; no qualified 170 tokens/s result |
+| Full native MTP/DFlash cycle | Bounded complete-cycle recorder passed B1/B2/B3,T4/T8 and fixed-page comparisons; scheduler/HTTP admission incomplete, no qualified170 tokens/s result |
+
+Subsequent [packed target work](PACKED_TARGET_CHECKPOINT.md) passed actual
+two-layer mixed scheduling and70-layer native SWA, advancing target replay and
+independent target-feature checks on eight ranks. Three changing target replays
+were byte-exact against the same eager program. These are functional diagnostics,
+not new serving performance. Historical floating thresholds are now reported
+separately under the user's deferred-precision rule. Serving speculative
+admission remains closed for allocator/lifetime/full-cycle work, rather than
+requiring FP64 agreement. A DFlash proposal-position bug was found and fixed;
+the earlier zero-acceptance smoke result is not a valid drafter assessment.
+The corrected real4K,T4 smoke emitted21 tokens in eight cycles (tau2.625), with
+all TP ranks agreeing. Eager cycle median345.76ms remains diagnostic overhead;
+there is still no native full-cycle service TPS result.
+Subsequent [complete-cycle recording and binding comparisons](NATIVE_SPECULATION_CHECKPOINT.md)
+passed on eight ranks. Removing changing-history binding construction improved
+the three-request,T8 diagnostic median78.79→58.69ms in one resident-process pair;
+single-request cycle timing did not improve. This is not a new serving TPS.
 
 The multi-request generation test used a private 4K code-review corpus, greedy
 sampling, and a 96-token output budget. The common decode window begins after
@@ -23,6 +40,16 @@ every request has returned four tokens. Per-request denominators end at each
 request's own completion; summing those rates is not a valid aggregate measure.
 The timing is at the engine client, not HTTP. Outputs hit the length budget, so
 they do not establish complete-answer or EOS quality.
+
+Later aligned private DFlash model-chain diagnostics measured B1,T8 at28.37ms
+and B2,T4 at31.91ms per cycle. Counting emitted tokens over the same unprofiled
+replays gives181.38 and94.06/101.29 diagnostic tokens/s respectively. These
+exclude external full-KV audits, cold capture and profiler work; they are not
+new serving/HTTP results. All eight ranks passed, readable partial continuations
+were preserved, and precision selection remains deferred. Aligned B3,T4 still
+misses the80 tokens/s/request target on its slower request. A compact12 MoE
+wrapper experiment is numerically correct but did not improve full-cycle cost.
+See [scope and remaining integration](NATIVE_SPECULATION_CHECKPOINT.md).
 
 ## Prefill interference
 
@@ -47,3 +74,15 @@ Small-M production MoE remains on the hand-scheduled TPC path. A slower
 decode-to-BF16/MME experiment is not promoted merely because it uses MME.
 Dispatch should depend on each expert's actual M and measured complete-chain
 cost, not just total batch size.
+
+
+## Device expert-M dispatch checkpoint
+
+The [W4A16 expert dispatcher](MOE_EXPERT_DISPATCH_CHECKPOINT.md) partitions
+experts on device and avoids repeated weight decode across M tiles. A T512
+complete local MoE chain improved6.790→4.522ms on saved checkpoint routes;
+one shared plan also beat broadcast for8/32/384 active-expert distributions.
+T513, sparse padding/NaN poisoning, restored routes and CPU FP32 reference
+checks were added. These are operator results, not a new full-model TPS.
+Production defaults and small-T compact dispatch remain unchanged; provider
+consolidation and model integration are still required. W4A8 remains pending.

@@ -45,7 +45,7 @@
     }
   },
   "runtime": {
-    "executor": "legacy_native",
+    "executor": "pytorch",
     "flights": 1,
     "buckets": {
       "batch": [
@@ -54,7 +54,8 @@
       "tokens": [
         1
       ]
-    }
+    },
+    "runner": "native"
   },
   "diagnostics": {
     "profile": false,

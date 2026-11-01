@@ -10,7 +10,7 @@ for ri,r in enumerate(['bf16','f32']):
   commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64',name+'.o',name+'_x86.o']);objects.append(name+'_x86.o')
 for flag,suffix in [('-c','o'),('-S','s')]:commands.append(['/usr/bin/tpc-clang','-O2','-ffp-contract=off','-mcpu=gaudi2','-DCACHE_INPUT=1',flag,str(src),'-o','cache_bf16_v2.'+suffix])
 commands.append(['objcopy','-I','binary','-O','elf64-x86-64','-B','i386:x86-64','cache_bf16_v2.o','cache_bf16_v2_x86.o']);objects.append('cache_bf16_v2_x86.o')
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-I'+a.glue_include,str(glue),*objects,'-o','libgaudi_qkv_postprocess_tpc.so'])
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack','-I'+a.glue_include,str(glue),*objects,'-o','libgaudi_qkv_postprocess_tpc.so'])
 meta={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'commands':commands,'state':'building','device_verified':False}
 for path in [src,glue,root/'csrc/torch/qkv_postprocess.cpp',root/'python/gaudi_kernels/qkv_postprocess.py',Path(__file__).resolve()]:
  target=out/'source'/path.relative_to(root);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)

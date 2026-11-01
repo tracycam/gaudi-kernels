@@ -32,7 +32,7 @@ for name,filename,flags in variants:
     objects.append(name+'_x86.o')
 glue=root/'csrc/host/block_fp8_glue.cpp'
 sources[str(glue.relative_to(root))]=hashlib.sha256(glue.read_bytes()).hexdigest()
-commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs',
+commands.append(['g++','-O2','-std=c++17','-shared','-fPIC','-Wl,-z,defs','-Wl,-z,noexecstack',
     '-I'+args.include_dir,str(glue),*objects,'-o','libgaudi_block_fp8_tpc.so'])
 metadata={'source_sha256':sources,'commands':commands,'state':'building',
     'scope':'TPC kernel database; no PyTorch OpBackend binding, no new HPU validation'}

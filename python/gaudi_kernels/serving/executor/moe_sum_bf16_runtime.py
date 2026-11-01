@@ -32,7 +32,7 @@ def eligible(runner, states, trunc_size, reduced, native):
     config = runner.moe_config
     max_rows = execution_context().selection.engine.decode.tp_reduce.fp32_max_rows
     max_bytes = execution_context().selection.engine.decode.tp_reduce.fp32_max_bytes
-    return native and (not reduced) and (not config.is_sequence_parallel) and (not config.skip_final_all_reduce) and (config.tp_size == 8) and (config.ep_size == 1) and (states.dtype == torch.float32) and (states.device.type == 'hpu') and states.ndim == 2 and states.shape[1] == 6144 and 1 <= states.shape[0] <= max_rows and states.numel()*states.element_size() <= max_bytes and states.is_contiguous() and (not states.requires_grad) and (trunc_size in (None, 6144))
+    return native and (not reduced) and (not config.is_sequence_parallel) and (not config.skip_final_all_reduce) and (config.tp_size > 1) and (config.ep_size == 1) and (states.dtype == torch.float32) and (states.device.type == 'hpu') and states.ndim == 2 and states.shape[1] > 0 and states.shape[1] % 128 == 0 and 1 <= states.shape[0] <= max_rows and states.numel()*states.element_size() <= max_bytes and states.is_contiguous() and (not states.requires_grad) and (trunc_size in (None, states.shape[1]))
 
 @contextmanager
 def final_scope(runner, states, trunc_size, reduced, native):
@@ -45,10 +45,10 @@ def final_scope(runner, states, trunc_size, reduced, native):
         return
     if getattr(_LOCAL, 'scope', None) is not None:
         raise RuntimeError('Nested native MoE final-reduction scope is unsupported')
-    scope = {'input': states, 'used': False}
+    scope = {'input': states, 'tp_size': runner.moe_config.tp_size, 'used': False}
     _LOCAL.scope = scope
     _COUNTS['eligible_final_calls'] += 1
-    if trunc_size == 6144:
+    if trunc_size == states.shape[1]:
         _COUNTS['no_op_truncation_elided'] += 1
     try:
         yield True
@@ -66,7 +66,7 @@ def select_bf16_output(input_tensor, ranks):
         return False
     if scope['used']:
         raise RuntimeError('A final MoE scope attempted more than one FP32 AG sum')
-    if ranks != 8 or input_tensor is not scope['input']:
+    if ranks < 2 or ranks != scope.get('tp_size', ranks) or input_tensor is not scope['input']:
         _COUNTS['scope_identity_or_rank_mismatch'] += 1
         return False
     scope['used'] = True
@@ -74,4 +74,5 @@ def select_bf16_output(input_tensor, ranks):
     return True
 
 def snapshot():
-    return {'policy': _POLICY, 'operator': 'precision_fix::sum_fb' if _POLICY == 'moe_final_bf16' else None, 'python_capture_counts': dict(_COUNTS), 'shape': ['1..'+str(execution_context().selection.engine.decode.tp_reduce.fp32_max_rows), 6144], 'tp': 8, 'scope': 'one-use native MoE final FP32 AG sum; same rank order then BF16 RNE; capture counts are not launches or device invocation counts'}
+    tp = execution_context().selection.engine.parallel.tp
+    return {'policy': _POLICY, 'operator': 'precision_fix::sum_fb' if _POLICY == 'moe_final_bf16' else None, 'python_capture_counts': dict(_COUNTS), 'shape': ['1..'+str(execution_context().selection.engine.decode.tp_reduce.fp32_max_rows), 'H%128==0'], 'tp': tp, 'scope': 'one-use native MoE final FP32 AG sum; same rank order then BF16 RNE; capture counts are not launches or device invocation counts'}

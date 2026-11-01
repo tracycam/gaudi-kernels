@@ -36,6 +36,14 @@ def set_norm_policy(policy):
 
 def _prepare_instance(module):
     weight = module.weight
+    if weight.dtype == torch.float32:
+        try:
+            from vllm.config import get_current_vllm_config
+            cfg = get_current_vllm_config()
+            if getattr(getattr(cfg, 'model_config', None), 'dtype', None) == torch.bfloat16:
+                weight.data = weight.data.to(torch.bfloat16)
+        except Exception:
+            pass
     frozen = bool(weight.requires_grad)
     if frozen:
         weight.requires_grad_(False)
@@ -43,7 +51,8 @@ def _prepare_instance(module):
     # does not redirect instances constructed before installation.
     bound = getattr(module, '_forward_method', None)
     fn = getattr(bound, '__func__', None)
-    rebound = fn is _original_forward
+    native_forward = getattr(type(module), 'forward_native', None)
+    rebound = fn is _original_forward or (native_forward is not None and fn is native_forward)
     if rebound:
         module._forward_method = module.forward_oot
     dispatch_supported = rebound or fn is _forward

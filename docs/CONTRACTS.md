@@ -14,7 +14,7 @@ W 是权重位宽，A 是激活的算术精度；
 | FP8，FP32 128×128 K-block scale | W8A8 | native FP8 + SRAM 部分和/归约 | K-block 流式缩放累加候选 | 本 QKV 小 M 有实测；大 M 通用高效方案仍缺 |
 | 同上 | W8A16 | TPC 或 SRAM BF16 MME | SRAM BF16 MME，按几何分块 | 已测 QKV；框架图内接入未完成 |
 | BF16 | W16A16 | TPC GEMV 与 MME 比较 | 厂商 BF16 MME + FP32 累加 | 110配置通过；选定MME/SRAM/尾行计划，TPC候选未胜出 |
-| MXFP4，E2M1 + 每32个K元素共享E8M0 | W4A16 | 融合 TPC GEMV | 按专家 grouped GEMM，TPC解码/SRAM/BF16 MME | 新N256原生及静态框架组已测；E8M0仅2..252，设备动态路由未完成 |
+| MXFP4，E2M1 + 每32个K元素共享E8M0 | W4A16 | 融合 TPC GEMV | 按专家 grouped GEMM，TPC解码/SRAM/BF16 MME | 新N256原生及静态框架组已测；HistoricalN512设备分桶T≤513已测，模型默认接线待完成；E8M0仅2..252 |
 | MXFP4，同上 | W4A8 | 只在显式允许激活量化时研究 | FP8 MME + 对应块缩放/归约 | 可选实验，不能自动替换 W4A16 |
 
 FP8 MME 执行原生 FP8 操作数。把 BF16 激活转换到 FP8 会改变激活合同；若要

@@ -12,19 +12,35 @@ def bounded_timeout(value):
     return seconds
 
 
-parser=argparse.ArgumentParser();parser.add_argument('case');parser.add_argument('mode',choices=['native','baseline'])
+parser=argparse.ArgumentParser(allow_abbrev=False);parser.add_argument('case');parser.add_argument('mode',choices=['baseline'])
 parser.add_argument('--timeout-seconds',type=bounded_timeout,default=1800,
                     help='Owned process-group wall budget, 60..7200 seconds; default remains 1800')
 parser.add_argument('--output-root', type=Path, required=True)
 parser.add_argument('--manifest', type=Path, required=True)
 parser.add_argument('--plugin-source', type=Path, required=True)
 parser.add_argument('--vllm-source', type=Path, required=True)
-parser.add_argument('--benchmark-module', default='tools.validation.executor.native_service_test',
-                    choices=('tools.validation.executor.native_service_test',
+parser.add_argument('--serving', action='store_true',
+                    help='Supervise the standard vLLM API through the production serving launcher')
+parser.add_argument('--benchmark-module', default='tools.validation.executor.bridge_model_test',
+                    choices=('tools.validation.executor.collective_health_probe',
+                             'tools.validation.executor.bridge_collective_test',
+                             'tools.validation.executor.bridge_copy_test',
+                             'tools.validation.executor.bridge_model_test',
+                             'tools.validation.executor.bridge_gap_test',
                              'tools.validation.executor.migration_latency_repeat',
-                             'tools.validation.executor.native_batch_test'))
+                             'tools.validation.executor.packed_model_probe',
+                             'tools.validation.executor.prefill_dispatch_probe'))
 args,extra=parser.parse_known_args();root=args.output_root.resolve();root.mkdir(parents=True,exist_ok=True)
-assert '/' not in args.case and not (root/args.case).exists()
+source_root=Path(__file__).resolve().parents[3]
+source_identity=source_root/'source-identity.json'
+source_commit=os.getenv('SOURCE_GIT_COMMIT')
+if source_identity.is_file():
+    exported=json.loads(source_identity.read_text())['git_commit']
+    if source_commit and not exported.startswith(source_commit):
+        raise ValueError('Declared source commit does not match exported source')
+    source_commit=exported
+
+assert '/' not in args.case and not (root/args.case).exists() and not (root/(args.case+'.exit.json')).exists()
 lock_root=Path.home()/'gaudi-llm-experiments/.codex-kernel-locks'
 lock_root.mkdir(parents=True,exist_ok=True)
 locks=[]
@@ -37,7 +53,7 @@ blocked=lock_root/'device-query.blocked.json'
 if active_quarantine(blocked):raise RuntimeError('device query quarantined')
 command=['hl-smi','--query-aip=index,memory.used,utilization.aip','--format=csv,noheader']
 start=time.monotonic();meta={'returncode':None,'reason':None,'case':args.case,
-    'mode':args.mode,'arguments':extra,'source_commit':os.getenv('SOURCE_GIT_COMMIT'),
+    'mode':args.mode,'arguments':extra,'source_commit':source_commit,
     'requested_modules':list(range(8)), 'timeout_seconds':args.timeout_seconds,
     'runner_process':identity(os.getpid()), 'stage':'preflight'}
 def save():
@@ -77,18 +93,21 @@ try:
         child_environment=dict(os.environ)
         child_environment['PYTHONPATH']=str(source_root/'python')+os.pathsep+str(source_root)
 
-        child=subprocess.Popen([sys.executable, '-m', 'tools.validation.launch',
+        launcher = 'gaudi_kernels.serving.launch' if args.serving else 'tools.validation.launch'
+        module_args = [] if args.serving else ['--benchmark-module', args.benchmark_module]
+        child=subprocess.Popen([sys.executable, '-m', launcher,
                                 '--manifest', str(args.manifest.resolve(strict=True)),
                                 '--plugin-source', str(args.plugin_source.resolve(strict=True)),
                                 '--vllm-source', str(args.vllm_source.resolve(strict=True)),
-                                '--benchmark-module', args.benchmark_module,
-                                '--', *(['--native'] if args.mode=='native' and args.benchmark_module=='tools.validation.executor.native_service_test' else []), *extra],cwd=root,
+                                *module_args, '--', *extra],cwd=root,
                                stdout=out,stderr=subprocess.STDOUT,start_new_session=True,env=child_environment)
         meta['process']=identity(child.pid);meta['stage']='running';save();offset=0
         while child.poll() is None:
             time.sleep(1)
             with (root/(args.case+'.log')).open('rb') as src:src.seek(offset);chunk=src.read();offset=src.tell()
             fatal=any(x in chunk for x in [b'ValidateSyncInputTensors tensor_data is empty',b'Engine core initialization failed.',b'Synapse detected a device critical error',b'PT_DEVMEM OOM',b'FIXED_PLAN_REPLAY_ERROR'])
+            fatal=fatal or b'RuntimeError: Empty tensor optional' in chunk
+            fatal=fatal or b'is not serializableSet VLLM_ALLOW_INSECURE_SERIALIZATION' in chunk
             fatal=fatal or (b'E1_GATE' in chunk and b'"status": "FAIL"' in chunk)
             if fatal or time.monotonic()-start>args.timeout_seconds:
                 meta['reason']='fatal rank error' if fatal else str(args.timeout_seconds)+' second timeout'

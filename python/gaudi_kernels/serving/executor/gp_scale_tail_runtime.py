@@ -5,7 +5,14 @@ import json
 import os
 from pathlib import Path
 import shutil
-QUALIFIED_SHA256 = {'tpc': 'f45f038808d6ec6ba14ac99445fe7bdce35a523c6f63271a3f37624e57130e07', 'torch': 'c73a48e86e32fb5b531cc97d5c205bc35f28c654820773cd82814702688db410'}
+QUALIFIED_SHA256 = {
+    'tpc': (
+        'f45f038808d6ec6ba14ac99445fe7bdce35a523c6f63271a3f37624e57130e07',
+        '6e560b5e69fb79e47a414f431c3e528dc7eacad711ca7aeab3ee94d7580195fc',
+        '02a9f1da5e33933f62a5b4aee75bb02fbc82389553a097a23c74ced0693d6fed',
+    ),
+    'torch': 'c73a48e86e32fb5b531cc97d5c205bc35f28c654820773cd82814702688db410',
+}
 PREFIX = 'GK_MXFP4_SCALE_TAIL_'
 NAMESPACE = 'gaudi_gp_scale_tail'
 OPERATOR = 'gp'
