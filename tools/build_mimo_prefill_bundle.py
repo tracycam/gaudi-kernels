@@ -15,6 +15,8 @@ out.mkdir(parents=True, exist_ok=False)
 objects = []
 kernels = [
     ('prefill_softmax', 'full_mme_attention/prefill_softmax.c'),
+    ('swa_mme_gather', 'swa_prefill_mme/gather.c'),
+    ('swa_mme_softmax', 'swa_prefill_mme/softmax.c'),
     ('router_post', 'moe_prefill/router_post.c'),
     ('gate', 'mimo_moe_gate_fp32/main.c'),
     ('combine', 'mxfp4_moe/legacy/combine_f32.c'),
@@ -44,7 +46,7 @@ for name in partition:
     objects.append('pc_' + name + '_x86.o')
 symbols = ('GetKernelGuids', 'InstantiateTpcKernel', 'GetShapeInference',
            'GetSupportedDataLayout', 'GetLibVersion')
-for prefix, glue in [('full', 'full_mme_prefill_softmax_glue.cpp'),
+for prefix, glue in [('swa_mme', 'swa_prefill_mme_glue.cpp'), ('full', 'full_mme_prefill_softmax_glue.cpp'),
                      ('moe', 'moe_prefill_glue.cpp'), ('dense', 'dense_prefill_glue.cpp'),
                      ('embedding', 'mimo_embedding_glue.cpp'), ('argmax', 'mimo_argmax_glue.cpp'),
                      ('qkv', 'block_fp8_reduce_compensated_glue.cpp'),
