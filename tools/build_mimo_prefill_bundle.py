@@ -23,6 +23,7 @@ kernels = [
     ('swiglu', 'dense_prefill/swiglu.c'),
     ('residual_rmsnorm', 'dense_fp32/residual_rmsnorm.c'),
     ('linear', 'dense_prefill/linear.c'),
+    ('dense_weight_split', 'dense_prefill/weight_split.c'),
     ('mimo_embedding', 'mimo_step/embedding.c'),
     ('mimo_argmax_parts', 'mimo_step/argmax_parts.c'),
     ('mimo_argmax_finish', 'mimo_step/argmax_finish.c'),
@@ -48,6 +49,7 @@ symbols = ('GetKernelGuids', 'InstantiateTpcKernel', 'GetShapeInference',
            'GetSupportedDataLayout', 'GetLibVersion')
 for prefix, glue in [('swa_mme', 'swa_prefill_mme_glue.cpp'), ('full', 'full_mme_prefill_softmax_glue.cpp'),
                      ('moe', 'moe_prefill_glue.cpp'), ('dense', 'dense_prefill_glue.cpp'),
+                     ('dense_split', 'dense_weight_split_glue.cpp'),
                      ('embedding', 'mimo_embedding_glue.cpp'), ('argmax', 'mimo_argmax_glue.cpp'),
                      ('qkv', 'block_fp8_reduce_compensated_glue.cpp'),
                      ('part', 'moe_partition_glue.cpp')]:
