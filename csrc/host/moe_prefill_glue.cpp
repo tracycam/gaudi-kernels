@@ -29,7 +29,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   const auto& p=*static_cast<const Params*>(in->nodeParams.nodeParams);
   if(!std::isfinite(p.factor) || (p.renormalize!=0 && p.renormalize!=1) || (p.apply_scale!=0 && p.apply_scale!=1)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto rows=in->inputTensors[0].geometry.maxSizes[1];
-  if((rows!=32 && rows!=256 && rows!=512) ||
+  if((rows!=32 && rows!=256 && rows!=512 && rows!=1024) ||
      !shape(in->inputTensors[0],DATA_F32,{384,rows}) || !shape(in->inputTensors[1],DATA_I32,{8,rows}) ||
      !shape(in->outputTensors[0],DATA_F32,{8,rows}) || !shape(in->outputTensors[1],DATA_I32,{8,rows}) ||
      !shape(in->outputTensors[2],DATA_F32,{1,rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;

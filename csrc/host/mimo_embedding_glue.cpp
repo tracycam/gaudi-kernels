@@ -44,7 +44,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
       embedding.dataType != DATA_BF16 || status.dataType != DATA_I32)
     return GLUE_INCOMPATIBLE_DATA_TYPE;
   const auto rows = token.maxSizes[0];
-  if ((rows != 1 && rows != 32 && rows != 256 && rows != 512) || !fixed_shape(table, 2, 6144, 152576) ||
+  if ((rows != 1 && rows != 32 && rows != 256 && rows != 512 && rows != 1024) || !fixed_shape(table, 2, 6144, 152576) ||
       !fixed_shape(token, 1, rows, 0))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (!fixed_shape(embedding, 2, 6144, rows) || !fixed_shape(status, 1, rows, 0))

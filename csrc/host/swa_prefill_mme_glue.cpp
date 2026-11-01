@@ -24,18 +24,19 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
  if(in->nodeParams.nodeParamsSize!=(id?4u:0u)||(id&&!in->nodeParams.nodeParams))return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
  auto*x=in->inputTensors;auto*y=in->outputTensors;
  if(id==0){
-  unsigned long slots=x[0].geometry.maxSizes[2];
-  if(!slots||slots%128||!shape(x[0],DATA_BF16,{192,1,slots})||!shape(x[1],DATA_BF16,{128,1,slots})||
-     !shape(x[2],DATA_I32,{1024})||!shape(x[3],DATA_I32,{1024})||!shape(x[4],DATA_I32,{512})||
-     !shape(y[0],DATA_BF16,{192,384,4})||!shape(y[1],DATA_BF16,{128,384,4}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  out->indexSpaceRank=2;out->indexSpaceGeometry[0]=384;out->indexSpaceGeometry[1]=4;
+  unsigned long slots=x[0].geometry.maxSizes[2],rows=x[4].geometry.maxSizes[0];
+  if((rows!=512&&rows!=1024)||!slots||slots%128||!shape(x[0],DATA_BF16,{192,1,slots})||!shape(x[1],DATA_BF16,{128,1,slots})||
+     !shape(x[2],DATA_I32,{2*rows})||!shape(x[3],DATA_I32,{2*rows})||!shape(x[4],DATA_I32,{rows})||
+     !shape(y[0],DATA_BF16,{192,384,rows/128})||!shape(y[1],DATA_BF16,{128,384,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  out->indexSpaceRank=2;out->indexSpaceGeometry[0]=384;out->indexSpaceGeometry[1]=rows/128;
   for(unsigned i=0;i<2;++i){auto&p=out->outputTensorAccessPattern[i];p.mapping[0]={0,0,0,i?127:191};p.mapping[1]={0,1,0,0};p.mapping[2]={1,1,0,0};}
  }else{
+  unsigned long rows=x[1].geometry.maxSizes[0];
   float scale=*static_cast<float*>(in->nodeParams.nodeParams);
   if(!std::isfinite(scale)||scale<=0)return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  if(!shape(x[0],DATA_F32,{384,2048,4})||!shape(x[1],DATA_I32,{512})||!shape(x[2],DATA_BF16,{16})||
-     !shape(y[0],DATA_BF16,{384,2048,4})||!shape(y[1],DATA_BF16,{384,2048,4}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  out->indexSpaceRank=2;out->indexSpaceGeometry[0]=2048;out->indexSpaceGeometry[1]=4;
+  if((rows!=512&&rows!=1024)||!shape(x[0],DATA_F32,{384,2048,rows/128})||!shape(x[1],DATA_I32,{rows})||!shape(x[2],DATA_BF16,{16})||
+     !shape(y[0],DATA_BF16,{384,2048,rows/128})||!shape(y[1],DATA_BF16,{384,2048,rows/128}))return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  out->indexSpaceRank=2;out->indexSpaceGeometry[0]=2048;out->indexSpaceGeometry[1]=rows/128;
   for(unsigned i=0;i<2;++i){auto&p=out->outputTensorAccessPattern[i];p.mapping[0]={0,0,0,383};p.mapping[1]={0,1,0,0};p.mapping[2]={1,1,0,0};}
   out->kernel.paramsNr=1;std::memcpy(out->kernel.scalarParams,&scale,4);
  }
