@@ -4,17 +4,34 @@
 #include <initializer_list>
 using namespace tpc_lib_api;
 #define ELF(n) extern "C" unsigned char _binary_pc_##n##_o_start,_binary_pc_##n##_o_end;
-ELF(prefix) ELF(inverse) ELF(row_map) ELF(gather) ELF(gate) ELF(combine) ELF(decode) ELF(queue) ELF(queue_gemv) ELF(sparse_map) ELF(counted_gather) ELF(count) ELF(prefix_largest)
+ELF(prefix) ELF(inverse) ELF(gate) ELF(combine) ELF(decode) ELF(sparse_map) ELF(counted_gather) ELF(count)
+#ifndef GAUDIRT_PARTITION_PREFILL_ONLY
+ELF(row_map) ELF(gather) ELF(queue) ELF(queue_gemv) ELF(prefix_largest)
+#endif
 namespace {
 const char* names[]={"gk_expert_prefix","gk_expert_inverse","gk_expert_map","gk_expert_gather","gk_expert_gate","gk_expert_combine","gk_expert_decode_k8","gk_expert_queue","gk_expert_queue_gemv","gk_expert_sparse_map","gk_expert_counted_gather","gk_expert_count","gk_expert_prefix_largest"};
-int which(const char*s){for(int i=0;i<13;++i)if(!std::strcmp(s,names[i]))return i;return -1;}
+int which(const char*s){for(int i=0;i<13;++i)if(!std::strcmp(s,names[i])){
+#ifdef GAUDIRT_PARTITION_PREFILL_ONLY
+ if(i==2||i==3||i==7||i==8||i==12)return -1;
+#endif
+ return i;}return -1;}
 bool shape(const Tensor&t,TensorDataType dt,std::initializer_list<unsigned> sizes){
  if(t.geometry.dataType!=dt||t.geometry.dims!=sizes.size())return false;
  unsigned i=0;for(auto n:sizes){if(!n||t.geometry.maxSizes[i]!=n||t.geometry.minSizes[i]!=n)return false;++i;}return true;
 }
 template<class T>void map(T&p,int d,int i,int a,int hi){p.mapping[d].indexSpaceDim=i;p.mapping[d].a=a;p.mapping[d].start_b=0;p.mapping[d].end_b=hi;}
 }
-extern "C" GlueCodeReturn GetKernelGuids(DeviceId d,uint32_t*n,GuidInfo*g){unsigned cap=*n;*n=d==DEVICE_ID_GAUDI2?13:0;if(g)for(unsigned i=0;i<std::min(cap,*n);++i)std::strcpy(g[i].name,names[i]);return GLUE_SUCCESS;}
+extern "C" GlueCodeReturn GetKernelGuids(DeviceId d,uint32_t*n,GuidInfo*g){
+ unsigned cap=*n;
+#ifdef GAUDIRT_PARTITION_PREFILL_ONLY
+ const unsigned ids[]={0,1,4,5,6,9,10,11};
+ *n=d==DEVICE_ID_GAUDI2?8:0;
+ if(g)for(unsigned i=0;i<std::min(cap,*n);++i)std::strcpy(g[i].name,names[ids[i]]);
+#else
+ *n=d==DEVICE_ID_GAUDI2?13:0;if(g)for(unsigned i=0;i<std::min(cap,*n);++i)std::strcpy(g[i].name,names[i]);
+#endif
+ return GLUE_SUCCESS;
+}
 extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKernelInstantiation*out){
  int id=which(in->guid.name);if(id<0)return GLUE_NODE_NOT_FOUND;
  const unsigned ni[]={2,5,3,3,3,4,4,1,6,3,4,2,2},no[]={5,1,1,1,1,1,1,2,1,1,1,3,5},np[]={6,2,1,3,1,0,4,0,0,1,4,1,6};
@@ -71,8 +88,13 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams*in,HabanaKerne
  out->kernel.paramsNr=np[id];if(np[id])std::memcpy(out->kernel.scalarParams,p,np[id]*4);
 #define START(n) &_binary_pc_##n##_o_start
 #define END(n) &_binary_pc_##n##_o_end
+#ifdef GAUDIRT_PARTITION_PREFILL_ONLY
+ unsigned char*starts[]={START(prefix),START(inverse),nullptr,nullptr,START(gate),START(combine),START(decode),nullptr,nullptr,START(sparse_map),START(counted_gather),START(count),nullptr};
+ unsigned char*ends[]={END(prefix),END(inverse),nullptr,nullptr,END(gate),END(combine),END(decode),nullptr,nullptr,END(sparse_map),END(counted_gather),END(count),nullptr};
+#else
  unsigned char*starts[]={START(prefix),START(inverse),START(row_map),START(gather),START(gate),START(combine),START(decode),START(queue),START(queue_gemv),START(sparse_map),START(counted_gather),START(count),START(prefix_largest)};
  unsigned char*ends[]={END(prefix),END(inverse),END(row_map),END(gather),END(gate),END(combine),END(decode),END(queue),END(queue_gemv),END(sparse_map),END(counted_gather),END(count),END(prefix_largest)};
+#endif
  unsigned cap=out->kernel.elfSize;out->kernel.elfSize=ends[id]-starts[id];if(cap<out->kernel.elfSize)return GLUE_INSUFFICIENT_ELF_BUFFER;
  std::memcpy(out->kernel.kernelElf,starts[id],out->kernel.elfSize);return GLUE_SUCCESS;
 }

@@ -32,15 +32,27 @@ for name, source in kernels:
     subprocess.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
                     name + '.o', name + '_x86.o'], cwd=out, check=True)
     objects.append(name + '_x86.o')
+partition = ('prefix', 'inverse', 'gate', 'combine', 'decode', 'sparse_map', 'counted_gather', 'count')
+for name in partition:
+    source = root / 'csrc/tpc/moe_partition' / (name + '.c')
+    obj = 'pc_' + name + '.o'
+    flags = ['-DGK_ROUTE_DECODE_SCALE_BITS=1'] if name == 'decode' else []
+    subprocess.run([args.tpc_clang, '-O2', '-ffp-contract=off', '-mcpu=gaudi2', *flags,
+                    '-c', str(source), '-o', obj], cwd=out, check=True)
+    subprocess.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
+                    obj, 'pc_' + name + '_x86.o'], cwd=out, check=True)
+    objects.append('pc_' + name + '_x86.o')
 symbols = ('GetKernelGuids', 'InstantiateTpcKernel', 'GetShapeInference',
            'GetSupportedDataLayout', 'GetLibVersion')
 for prefix, glue in [('full', 'full_mme_prefill_softmax_glue.cpp'),
                      ('moe', 'moe_prefill_glue.cpp'), ('dense', 'dense_prefill_glue.cpp'),
                      ('embedding', 'mimo_embedding_glue.cpp'), ('argmax', 'mimo_argmax_glue.cpp'),
-                     ('qkv', 'block_fp8_reduce_compensated_glue.cpp')]:
+                     ('qkv', 'block_fp8_reduce_compensated_glue.cpp'),
+                     ('part', 'moe_partition_glue.cpp')]:
     obj = prefix + '_glue.o'
     subprocess.run(['g++', '-O2', '-std=c++17', '-fPIC', f'-I{args.glue_include}',
-                    *[f'-D{symbol}={prefix}_{symbol}' for symbol in symbols], '-c',
+                    *[f'-D{symbol}={prefix}_{symbol}' for symbol in symbols],
+                    *(['-DGAUDIRT_PARTITION_PREFILL_ONLY'] if prefix == 'part' else []), '-c',
                     str(root / 'csrc/host' / glue), '-o', obj], cwd=out, check=True)
     objects.append(obj)
 subprocess.run(['g++', '-O2', '-std=c++17', '-shared', '-fPIC', '-Wl,-z,defs',
