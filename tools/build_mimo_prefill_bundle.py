@@ -32,7 +32,7 @@ for name, source in kernels:
     subprocess.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
                     name + '.o', name + '_x86.o'], cwd=out, check=True)
     objects.append(name + '_x86.o')
-partition = ('prefix', 'inverse', 'gate', 'combine', 'decode', 'sparse_map', 'counted_gather', 'count')
+partition = ('prefix', 'prefix_split', 'inverse', 'gate', 'combine', 'decode', 'sparse_map', 'counted_gather', 'count')
 for name in partition:
     source = root / 'csrc/tpc/moe_partition' / (name + '.c')
     obj = 'pc_' + name + '.o'
