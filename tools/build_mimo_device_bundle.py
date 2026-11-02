@@ -14,6 +14,7 @@ out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 objects = []
 for group, name in (('full_mme_attention', 'gather'), ('full_mme_attention', 'softmax'),
+                    ('full_mme_attention', 'batch_gather'), ('full_mme_attention', 'batch_softmax'),
                     ('tp8_reduce', 'sum_bf16_bf16'), ('tp8_reduce', 'sum_f32_bf16')):
     flags = ['-ffp-contract=off'] if group == 'full_mme_attention' else []
     subprocess.run([args.tpc_clang, '-O2', *flags, '-mcpu=gaudi2', '-c',

@@ -13,7 +13,7 @@ root = Path(__file__).resolve().parents[1]
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 objects = []
-for name in ('gather', 'softmax'):
+for name in ('gather', 'softmax', 'batch_gather', 'batch_softmax'):
     subprocess.run([args.tpc_clang, '-O2', '-ffp-contract=off', '-mcpu=gaudi2', '-c',
                     str(root / f'csrc/tpc/full_mme_attention/{name}.c'), '-o', f'{name}.o'],
                    cwd=out, check=True)
