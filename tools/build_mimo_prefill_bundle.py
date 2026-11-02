@@ -25,7 +25,6 @@ kernels = [
     ('linear', 'dense_prefill/linear.c'),
     ('dense_weight_split', 'dense_prefill/weight_split.c'),
     ('dense_activation_split', 'dense_prefill/activation_split.c'),
-    ('dense_qkv_activation_split', 'dense_prefill/qkv_activation_split.c'),
     ('mimo_embedding', 'mimo_step/embedding.c'),
     ('mimo_argmax_parts', 'mimo_step/argmax_parts.c'),
     ('mimo_argmax_finish', 'mimo_step/argmax_finish.c'),

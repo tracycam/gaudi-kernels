@@ -5,53 +5,23 @@
 using namespace tpc_lib_api;
 extern "C" unsigned char _binary_dense_weight_split_o_start, _binary_dense_weight_split_o_end;
 extern "C" unsigned char _binary_dense_activation_split_o_start, _binary_dense_activation_split_o_end;
-extern "C" unsigned char _binary_dense_qkv_activation_split_o_start, _binary_dense_qkv_activation_split_o_end;
 namespace {
 constexpr const char* name = "gk_dense_block128_decode_split_v1";
 constexpr const char* activation_name = "gk_dense_activation_split_v1";
-constexpr const char* qkv_activation_name = "gk_qkv_activation_split_v1";
-bool named(const char* value) { return value && (!std::strcmp(value,name) || !std::strcmp(value,activation_name) || !std::strcmp(value,qkv_activation_name)); }
+bool named(const char* value) { return value && (!std::strcmp(value,name) || !std::strcmp(value,activation_name)); }
 template<class T> void map(T& p,int dim,int index,float stride,int lo,int hi) {
   p.mapping[dim].indexSpaceDim=index; p.mapping[dim].a=stride;
   p.mapping[dim].start_b=lo; p.mapping[dim].end_b=hi;
 }
 }
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device,uint32_t* count,GuidInfo* info) {
-  const auto capacity=*count; *count=device==DEVICE_ID_GAUDI2?3:0;
+  const auto capacity=*count; *count=device==DEVICE_ID_GAUDI2?2:0;
   if(info && capacity && *count) std::strcpy(info[0].name,name);
   if(info && capacity>1 && *count) std::strcpy(info[1].name,activation_name);
-  if(info && capacity>2 && *count) std::strcpy(info[2].name,qkv_activation_name);
   return GLUE_SUCCESS;
 }
 extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKernelInstantiation* out) {
   if(!named(in->guid.name)) return GLUE_NODE_NOT_FOUND;
-  if(!std::strcmp(in->guid.name,qkv_activation_name)) {
-    if(in->inputTensorNr!=2 || in->outputTensorNr!=2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
-    const auto& x=in->inputTensors[0].geometry; const auto& s=in->inputTensors[1].geometry;
-    if(x.dims!=3 || x.dataType!=DATA_F8_143 || x.maxSizes[0]!=128 ||
-       !x.maxSizes[1] || x.maxSizes[1]>2048 || !x.maxSizes[2] ||
-       s.dims!=3 || s.dataType!=DATA_F32 || s.maxSizes[0]!=1 ||
-       s.maxSizes[1]!=x.maxSizes[1] || s.maxSizes[2]!=x.maxSizes[2])
-      return GLUE_INCOMPATIBLE_INPUT_SIZE;
-    out->indexSpaceRank=2; out->indexSpaceGeometry[0]=x.maxSizes[2]; out->indexSpaceGeometry[1]=x.maxSizes[1];
-    auto& a=out->inputTensorAccessPattern[0]; a.allRequired=0;
-    map(a,0,0,0,0,127); map(a,1,1,1,0,0); map(a,2,0,1,0,0);
-    auto& b=out->inputTensorAccessPattern[1]; b.allRequired=0;
-    map(b,0,0,0,0,0); map(b,1,1,1,0,0); map(b,2,0,1,0,0);
-    for(unsigned i=0;i<2;++i) {
-      const auto& y=in->outputTensors[i].geometry;
-      if(y.dims!=2 || y.dataType!=DATA_BF16 || y.maxSizes[0]!=128*x.maxSizes[2] ||
-         y.maxSizes[1]!=x.maxSizes[1]) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
-      auto& z=out->outputTensorAccessPattern[i]; z.allRequired=0;
-      map(z,0,0,128,0,127); map(z,1,1,1,0,0);
-    }
-    out->kernel.paramsNr=0;
-    const auto size=&_binary_dense_qkv_activation_split_o_end-&_binary_dense_qkv_activation_split_o_start;
-    const auto capacity=out->kernel.elfSize; out->kernel.elfSize=size;
-    if(capacity<size) return GLUE_INSUFFICIENT_ELF_BUFFER;
-    std::memcpy(out->kernel.kernelElf,&_binary_dense_qkv_activation_split_o_start,size);
-    return GLUE_SUCCESS;
-  }
   if(!std::strcmp(in->guid.name,activation_name)) {
     if(in->inputTensorNr!=1 || in->outputTensorNr!=2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
     const auto& x=in->inputTensors[0].geometry;
@@ -83,8 +53,8 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   if(in->inputTensorNr!=2 || in->outputTensorNr!=2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   const auto& w=in->inputTensors[0].geometry; const auto& s=in->inputTensors[1].geometry;
   const auto n=w.maxSizes[1], groups=w.maxSizes[2];
-  if(w.dims!=3 || w.dataType!=DATA_F8_143 || w.maxSizes[0]!=128 || !n || !groups ||
-     s.dims!=2 || s.dataType!=DATA_F32 || s.maxSizes[0]!=groups || s.maxSizes[1]!=(n+127)/128)
+  if(w.dims!=3 || w.dataType!=DATA_F8_143 || w.maxSizes[0]!=128 || !n || n%128 || !groups ||
+     s.dims!=2 || s.dataType!=DATA_F32 || s.maxSizes[0]!=groups || s.maxSizes[1]!=n/128)
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   for(unsigned i=0;i<2;++i) {
     const auto& y=in->outputTensors[i].geometry;
@@ -94,7 +64,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
     map(out->outputTensorAccessPattern[i],0,0,128,0,127);
     map(out->outputTensorAccessPattern[i],1,1,128,0,127);
   }
-  out->indexSpaceRank=2; out->indexSpaceGeometry[0]=groups; out->indexSpaceGeometry[1]=(n+127)/128;
+  out->indexSpaceRank=2; out->indexSpaceGeometry[0]=groups; out->indexSpaceGeometry[1]=n/128;
   auto& a=out->inputTensorAccessPattern[0]; a.allRequired=0;
   map(a,0,0,0,0,127); map(a,1,1,128,0,127); map(a,2,0,1,0,0);
   auto& b=out->inputTensorAccessPattern[1]; b.allRequired=0;
