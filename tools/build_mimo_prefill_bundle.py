@@ -29,6 +29,8 @@ kernels = [
     ('mimo_embedding', 'mimo_step/embedding.c'),
     ('mimo_argmax_parts', 'mimo_step/argmax_parts.c'),
     ('mimo_argmax_finish', 'mimo_step/argmax_finish.c'),
+    ('mimo_argmax_batch_parts', 'mimo_step/argmax_batch_parts.c'),
+    ('mimo_argmax_batch_finish', 'mimo_step/argmax_batch_finish.c'),
     ('reduce_compensated', 'block_fp8_reduce_isa/round_bf16_compensated.c'),
 ]
 for name, source in kernels:
