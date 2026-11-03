@@ -25,11 +25,26 @@ static inline float64 scale_from_bits(short128 bits){
  float128 wide=v_convert_bf16_to_f32_all_b((bfloat128)peak);
  return v_f32_max_b(wide.v1,1e-10f)*(1.f/448.f);
 }
+// Retain the low part of the normalization at BF16 halfway points.
+static inline float64 corrected_product(float64 x,float64 inv,float64 inv_lo,float64 weight){
+ float64 p=x*inv;
+ float64 pe=v_f32_mac_b(x,inv,-p)+x*inv_lo;
+ float64 y=p*weight;
+ float64 e=v_f32_mac_b(p,weight,-y)+pe*weight;
+ uint64 bits=(uint64)y;
+ uint64 up=v_u32_sel_eq_u32_b(bits&0x80000000,0,bits+1,bits-1);
+ uint64 down=v_u32_sel_eq_u32_b(bits&0x80000000,0,bits-1,bits+1);
+ float64 z=v_f32_sel_grt_f32_b(e,0.f,(float64)up,y);
+ z=v_f32_sel_less_f32_b(e,0.f,(float64)down,z);
+ return v_f32_sel_eq_u32_b(bits&0xffff,0x8000,z,y);
+}
 void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor q_out,tensor scales,float epsilon,int blocks){
  const int width=get_dim_size(x,0);
  int5 begin=get_index_space_offset(),end=begin+get_index_space_size();
  for(int row=begin[1];row<end[1];++row){
-  float128 ss={0,0};
+  // Keep a compensated sum and the low product bits until normalization.
+  // These bits can determine which side of a BF16 midpoint an output falls on.
+  float128 ss={0,0}, correction={0,0};
   int5 pk0={0,row,0,0,0},pk1={128,row,0,0,0};
   // Each task computes the same FP32 sum of squares over the complete row.
   for(int k=0;k<width;k+=256){
@@ -40,11 +55,42 @@ void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor q_out
    float128 xf1=v_convert_bf16_to_f32_all_b(x1), rf1=v_convert_bf16_to_f32_all_b(r1);
    float128 s0={xf0.v1+rf0.v1,xf0.v2+rf0.v2};
    float128 s1={xf1.v1+rf1.v1,xf1.v2+rf1.v2};
-   ss.v1=v_f32_mac_b(s0.v1,s0.v1,ss.v1); ss.v2=v_f32_mac_b(s0.v2,s0.v2,ss.v2);
-   ss.v1=v_f32_mac_b(s1.v1,s1.v1,ss.v1); ss.v2=v_f32_mac_b(s1.v2,s1.v2,ss.v2);
+#define ADD_SQUARE(S, V) { \
+   float64 term=(V)*(V); \
+   float64 term_error=v_f32_mac_b((V),(V),-term); \
+   float64 adjusted=term-correction.S; \
+   float64 updated=ss.S+adjusted; \
+   correction.S=((updated-ss.S)-adjusted)-term_error; \
+   ss.S=updated; \
+ }
+   ADD_SQUARE(v1,s0.v1) ADD_SQUARE(v2,s0.v2)
+   ADD_SQUARE(v1,s1.v1) ADD_SQUARE(v2,s1.v2)
+#undef ADD_SQUARE
   }
-  float64 sum=v_f32_reduce_add(ss.v1+ss.v2);
-  float64 inverse=v_rsqrt_f32(sum*(1.0f/(float)width)+epsilon);
+  float64 lanes=ss.v1+ss.v2;
+  float64 join1=(ss.v1-lanes)+ss.v2,join2=(ss.v2-lanes)+ss.v1;
+  float64 joinerr=v_f32_sel_geq_f32_b(ss.v1,ss.v2,join1,join2);
+  float64 total=v_f32_reduce_add(lanes);
+  float64 average=total*(1.0f/64.0f);
+  float64 sum_residual=v_f32_reduce_add((lanes-average)+(-correction.v1-correction.v2+joinerr));
+  float64 sum=total+sum_residual;
+  float64 sum_lo=(total-sum)+sum_residual;
+  float64 scale=1.0f/(float)width;
+  float64 scale_lo=v_f32_mac_b(-scale,(float)width,1.0f)*scale;
+  float64 prod=sum*scale;
+  float64 prod_lo=v_f32_mac_b(sum,scale,-prod)+sum_lo*scale;
+  prod_lo=v_f32_mac_b(sum,scale_lo,prod_lo);
+  float64 argument=prod+epsilon;
+  float64 argument_lo=((prod-argument)+epsilon)+prod_lo;
+  float64 inverse=v_rsqrt_f32(argument);
+  float64 square=inverse*inverse;
+  float64 square_lo=v_f32_mac_b(inverse,inverse,-square);
+  float64 error=v_f32_mac_b(-argument,square,1.0f);
+  error=error-(argument*square_lo+argument_lo*square);
+  float64 adjust=(0.5f*inverse)*error;
+  float64 refined=inverse+adjust;
+  float64 inverse_lo=(inverse-refined)+adjust;
+  inverse=refined;
   for(int task=begin[0];task<end[0];++task){
    int base_block=task*blocks;
    for(int j=0;j<blocks;j+=2){
@@ -63,8 +109,8 @@ void main(tensor x,tensor residual,tensor gamma,tensor residual_out,tensor q_out
     v_bf16_st_tnsr(p0,residual_out,rb0);
     v_bf16_st_tnsr(p1,residual_out,rb1);
     float128 wf0=v_convert_bf16_to_f32_all_b(gw0),wf1=v_convert_bf16_to_f32_all_b(gw1);
-    float128 y0={rf0.v1*inverse*wf0.v1,rf0.v2*inverse*wf0.v2};
-    float128 y1={rf1.v1*inverse*wf1.v1,rf1.v2*inverse*wf1.v2};
+    float128 y0={corrected_product(rf0.v1,inverse,inverse_lo,wf0.v1),corrected_product(rf0.v2,inverse,inverse_lo,wf0.v2)};
+    float128 y1={corrected_product(rf1.v1,inverse,inverse_lo,wf1.v1),corrected_product(rf1.v2,inverse,inverse_lo,wf1.v2)};
     // This BF16 norm boundary precedes amax and activation conversion.
     bfloat128 norm0=convert_float128_to_bfloat128(y0,SW_RHNE);
     bfloat128 norm1=convert_float128_to_bfloat128(y1,SW_RHNE);
