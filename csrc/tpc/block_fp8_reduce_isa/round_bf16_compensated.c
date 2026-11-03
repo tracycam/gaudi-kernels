@@ -39,6 +39,9 @@ void main(tensor partial, tensor activation_scales, tensor weight_scales,
         float64 ws = v_f32_ld_g(gen_addr(wp, weight_scales));
         float64 as = v_f32_ld_g(gen_addr(ap, activation_scales));
         float64 factor = ws * as;
+        // Preserve the part lost when the two FP32 scales are multiplied.
+        // It can decide the side of a BF16 midpoint in the final sum.
+        float64 factor_error = v_f32_mac_b(ws, as, -factor);
         float64 lo = v_f32_ld_tnsr_b(pp, partial);
         pp[0] += 64;
         float64 hi = v_f32_ld_tnsr_b(pp, partial);
@@ -50,6 +53,7 @@ void main(tensor partial, tensor activation_scales, tensor weight_scales,
         float64 second = (term - updated) + sum##S; \
         float64 residual = v_f32_sel_geq_f32_b(abs32(sum##S), abs32(term), first, second); \
         corr##S = corr##S + (residual + product_error); \
+        corr##S = v_f32_mac_b(V, factor_error, corr##S); \
         sum##S = updated; \
       }
         ACCUM(lo, lo)
