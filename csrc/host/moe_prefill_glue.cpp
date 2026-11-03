@@ -29,7 +29,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   const auto& p=*static_cast<const Params*>(in->nodeParams.nodeParams);
   if(!std::isfinite(p.factor) || (p.renormalize!=0 && p.renormalize!=1) || (p.apply_scale!=0 && p.apply_scale!=1)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto rows=in->inputTensors[0].geometry.maxSizes[1];
-  if((rows!=32 && rows!=256 && rows!=512 && rows!=1024 && rows!=2048) ||
+  if((rows!=4 && rows!=8 && rows!=32 && rows!=256 && rows!=512 && rows!=1024 && rows!=2048) ||
      !shape(in->inputTensors[0],DATA_F32,{384,rows}) || !shape(in->inputTensors[1],DATA_I32,{8,rows}) ||
      !shape(in->outputTensors[0],DATA_F32,{8,rows}) || !shape(in->outputTensors[1],DATA_I32,{8,rows}) ||
      !shape(in->outputTensors[2],DATA_F32,{1,rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
@@ -39,13 +39,17 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* in,HabanaKern
   int32_t parameter; std::memcpy(&parameter,in->nodeParams.nodeParams,sizeof(parameter));
   if(parameter!=(k==1?3:8)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   if(k==1) {
-   if(!shape(in->inputTensors[0],DATA_F32,{8*32*1536,1}) || !shape(in->inputTensors[1],DATA_I32,{8,32}) ||
-      !shape(in->outputTensors[0],DATA_BF16,{256,8*32})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-   out->indexSpaceGeometry[0]=8*32;
+   const auto rows=in->inputTensors[1].geometry.maxSizes[1];
+   if((rows!=4 && rows!=8 && rows!=32) ||
+      !shape(in->inputTensors[0],DATA_F32,{8*rows*1536,1}) || !shape(in->inputTensors[1],DATA_I32,{8,rows}) ||
+      !shape(in->outputTensors[0],DATA_BF16,{256,8*rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+   out->indexSpaceGeometry[0]=8*rows;
   } else {
-   if(!shape(in->inputTensors[0],DATA_F32,{8*32*6144,1}) || !shape(in->inputTensors[1],DATA_F32,{8,32}) ||
-      !shape(in->inputTensors[2],DATA_U8,{256,2}) || !shape(in->outputTensors[0],DATA_F32,{6144,32})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-   out->indexSpaceGeometry[0]=48*32;
+   const auto rows=in->inputTensors[1].geometry.maxSizes[1];
+   if((rows!=4 && rows!=8 && rows!=32) ||
+      !shape(in->inputTensors[0],DATA_F32,{8*rows*6144,1}) || !shape(in->inputTensors[1],DATA_F32,{8,rows}) ||
+      !shape(in->inputTensors[2],DATA_U8,{256,2}) || !shape(in->outputTensors[0],DATA_F32,{6144,rows})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+   out->indexSpaceGeometry[0]=48*rows;
   }
   out->kernel.paramsNr=1; std::memcpy(out->kernel.scalarParams,&parameter,sizeof(parameter));
  }
