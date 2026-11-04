@@ -20,7 +20,8 @@ def main():
                          ("fused_add_rms_norm_bf16", "generic_dense/fused_add_rms_norm_bf16.c"),
                          ("rms_norm_bf16", "generic_dense/rms_norm_bf16.c"),
                          ("silu_and_mul_bf16", "generic_dense/silu_and_mul_bf16.c"),
-                         ("kv_store_bf16", "generic_dense/kv_store_bf16.c")):
+                         ("kv_store_bf16", "generic_dense/kv_store_bf16.c"),
+                         ("paged_gqa_bf16", "generic_dense/paged_gqa_bf16.c")):
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
