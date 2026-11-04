@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "norm_math.h"
 // Both outputs consume the same BF16 residual boundary.
 void main(tensor x, tensor residual, tensor gamma, tensor residual_out, tensor norm_out,
           float epsilon) {
@@ -19,7 +20,7 @@ void main(tensor x, tensor residual, tensor gamma, tensor residual_out, tensor n
       ss = v_bf16_mac_acc32_b(rounded, rounded, ss);
     }
     float64 sum = v_f32_reduce_add(ss.v1 + ss.v2);
-    float64 inverse = v_rsqrt_f32(sum * (1.0f / (float)width) + epsilon);
+    float64 inverse = norm_refined_rsqrt(sum * (1.0f / (float)width) + epsilon);
     for (int k = 0; k < width; k += 128) {
       int5 pos = {k, row, 0, 0, 0}, g = {k, 0, 0, 0, 0};
       int count = s_i32_min(width - k, 128) - 1;
