@@ -18,7 +18,8 @@ def main():
     objects = []
     for name, source in (("add_bf16", "generic_dense/add_bf16.c"),
                          ("fused_add_rms_norm_bf16", "generic_dense/fused_add_rms_norm_bf16.c"),
-                         ("rms_norm_bf16", "residual_rmsnorm/pure.c")):
+                         ("rms_norm_bf16", "residual_rmsnorm/pure.c"),
+                         ("silu_and_mul_bf16", "generic_dense/silu_and_mul_bf16.c")):
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
