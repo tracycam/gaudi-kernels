@@ -10,18 +10,21 @@ extern "C" unsigned char _binary_add_bf16_o_start, _binary_add_bf16_o_end;
 extern "C" unsigned char _binary_fused_add_rms_norm_bf16_o_start, _binary_fused_add_rms_norm_bf16_o_end;
 extern "C" unsigned char _binary_rms_norm_bf16_o_start, _binary_rms_norm_bf16_o_end;
 extern "C" unsigned char _binary_silu_and_mul_bf16_o_start, _binary_silu_and_mul_bf16_o_end;
+extern "C" unsigned char _binary_kv_store_bf16_o_start, _binary_kv_store_bf16_o_end;
 
 namespace {
 constexpr const char* kAdd = "gk_add_bf16_v1";
 constexpr const char* kFusedNorm = "gk_fused_add_rms_norm_bf16_v1";
 constexpr const char* kNorm = "gk_rms_norm_bf16_v1";
 constexpr const char* kSilu = "gk_silu_and_mul_bf16_v1";
+constexpr const char* kKvStore = "gk_kv_store_bf16_v1";
 int kind(const char* name) {
   if (!name) return -1;
   if (std::strcmp(name, kAdd) == 0) return 0;
   if (std::strcmp(name, kFusedNorm) == 0) return 1;
   if (std::strcmp(name, kNorm) == 0) return 2;
   if (std::strcmp(name, kSilu) == 0) return 3;
+  if (std::strcmp(name, kKvStore) == 0) return 4;
   return -1;
 }
 
@@ -117,15 +120,73 @@ GlueCodeReturn instantiate_silu(HabanaKernelParams* input, HabanaKernelInstantia
   std::memcpy(output->kernel.kernelElf, &_binary_silu_and_mul_bf16_o_start, size);
   return GLUE_SUCCESS;
 }
+
+GlueCodeReturn instantiate_kv_store(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 4) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& key = input->inputTensors[0].geometry;
+  const auto& value = input->inputTensors[1].geometry;
+  const auto& locations = input->inputTensors[2].geometry;
+  const auto& metadata = input->inputTensors[3].geometry;
+  if (key.dataType != DATA_BF16 || value.dataType != DATA_BF16 || locations.dataType != DATA_I32 ||
+      metadata.dataType != DATA_I32 || input->outputTensors[0].geometry.dataType != DATA_BF16 ||
+      input->outputTensors[1].geometry.dataType != DATA_BF16)
+    return GLUE_INCOMPATIBLE_DATA_TYPE;
+  if (key.dims != 2 || !key.maxSizes[0] || key.maxSizes[0] > INT_MAX ||
+      !key.maxSizes[1] || key.maxSizes[1] > 4096 || key.minSizes[0] != key.maxSizes[0] ||
+      key.minSizes[1] != key.maxSizes[1] || value.dims != 2 ||
+      value.maxSizes[0] != key.maxSizes[0] || value.maxSizes[1] != key.maxSizes[1] ||
+      value.minSizes[0] != value.maxSizes[0] || value.minSizes[1] != value.maxSizes[1] ||
+      locations.dims != 1 || locations.maxSizes[0] != key.maxSizes[1] ||
+      locations.minSizes[0] != locations.maxSizes[0] || metadata.dims != 1 ||
+      metadata.maxSizes[0] != 1 || metadata.minSizes[0] != 1)
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  for (unsigned i = 0; i < 2; ++i) {
+    const auto& pool = input->outputTensors[i].geometry;
+    if (pool.dims != 2 || pool.maxSizes[0] != key.maxSizes[0] || !pool.maxSizes[1] ||
+        pool.maxSizes[1] > INT_MAX || pool.minSizes[0] != pool.maxSizes[0] ||
+        pool.minSizes[1] != pool.maxSizes[1] ||
+        (i == 1 && pool.maxSizes[1] != input->outputTensors[0].geometry.maxSizes[1]))
+      return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  }
+  output->indexSpaceRank = 2;
+  output->indexSpaceGeometry[0] = (key.maxSizes[0] + 127) / 128;
+  output->indexSpaceGeometry[1] = key.maxSizes[1];
+  for (unsigned i = 0; i < 2; ++i) {
+    auto& access = output->inputTensorAccessPattern[i];
+    access.allRequired = 0;
+    access.mapping[0].indexSpaceDim = 0;
+    access.mapping[0].a = 128;
+    access.mapping[0].start_b = 0;
+    access.mapping[0].end_b = 127;
+    access.mapping[1].indexSpaceDim = 1;
+    access.mapping[1].a = 1;
+    access.mapping[1].start_b = 0;
+    access.mapping[1].end_b = 0;
+  }
+  output->inputTensorAccessPattern[2].allRequired = 1;
+  output->inputTensorAccessPattern[3].allRequired = 1;
+  output->outputTensorAccessPattern[0].allRequired = 1;
+  output->outputTensorAccessPattern[1].allRequired = 1;
+  output->kernel.paramsNr = 0;
+  const unsigned size = static_cast<unsigned>(&_binary_kv_store_bf16_o_end - &_binary_kv_store_bf16_o_start);
+  const unsigned capacity = output->kernel.elfSize;
+  output->kernel.elfSize = size;
+  if (capacity < size) return GLUE_INSUFFICIENT_ELF_BUFFER;
+  std::memcpy(output->kernel.kernelElf, &_binary_kv_store_bf16_o_start, size);
+  return GLUE_SUCCESS;
+}
 }
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 4 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 5 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
   if (guids && *count && capacity > 3) std::strcpy(guids[3].name, kSilu);
+  if (guids && *count && capacity > 4) std::strcpy(guids[4].name, kKvStore);
   return GLUE_SUCCESS;
 }
 
@@ -135,6 +196,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id < 0) return GLUE_NODE_NOT_FOUND;
   if (id == 1 || id == 2) return instantiate_norm(input, output, id == 1);
   if (id == 3) return instantiate_silu(input, output);
+  if (id == 4) return instantiate_kv_store(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
