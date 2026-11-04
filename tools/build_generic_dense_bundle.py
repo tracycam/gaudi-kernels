@@ -15,14 +15,19 @@ def main():
     root = Path(__file__).resolve().parents[1]
     out = args.output_dir.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
-                    str(root / "csrc/tpc/generic_dense/add_bf16.c"), "-o", "add_bf16.o"],
-                   cwd=out, check=True)
-    subprocess.run(["objcopy", "-I", "binary", "-O", "elf64-x86-64", "-B", "i386:x86-64",
-                    "add_bf16.o", "add_bf16_x86.o"], cwd=out, check=True)
+    objects = []
+    for name, source in (("add_bf16", "generic_dense/add_bf16.c"),
+                         ("fused_add_rms_norm_bf16", "generic_dense/fused_add_rms_norm_bf16.c"),
+                         ("rms_norm_bf16", "residual_rmsnorm/pure.c")):
+        subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
+                        str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
+                       cwd=out, check=True)
+        subprocess.run(["objcopy", "-I", "binary", "-O", "elf64-x86-64", "-B", "i386:x86-64",
+                        f"{name}.o", f"{name}_x86.o"], cwd=out, check=True)
+        objects.append(f"{name}_x86.o")
     subprocess.run(["g++", "-O2", "-std=c++17", "-shared", "-fPIC", "-Wl,-z,defs",
                     "-Wl,-z,noexecstack", "-I" + args.glue_include,
-                    str(root / "csrc/host/generic_dense_glue.cpp"), "add_bf16_x86.o",
+                    str(root / "csrc/host/generic_dense_glue.cpp"), *objects,
                     "-o", "libgaudi_kernels_bundle.so"], cwd=out, check=True)
 
 
