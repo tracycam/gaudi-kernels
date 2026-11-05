@@ -22,6 +22,8 @@ def main():
                          ("silu_and_mul_bf16", "generic_dense/silu_and_mul_bf16.c"),
                          ("kv_store_bf16", "generic_dense/kv_store_bf16.c"),
                          ("paged_gqa_bf16", "generic_dense/paged_gqa_bf16.c"),
+                         ("paged_gqa_mme_gather_bf16", "generic_dense/paged_gqa_mme_gather_bf16.c"),
+                         ("paged_gqa_mme_softmax_bf16", "generic_dense/paged_gqa_mme_softmax_bf16.c"),
                          ("rotary_bf16", "generic_dense/rotary_bf16.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
