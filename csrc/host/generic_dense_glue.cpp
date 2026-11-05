@@ -16,6 +16,7 @@ extern "C" unsigned char _binary_kv_store_bf16_o_start, _binary_kv_store_bf16_o_
 extern "C" unsigned char _binary_paged_gqa_bf16_o_start, _binary_paged_gqa_bf16_o_end;
 extern "C" unsigned char _binary_rotary_bf16_o_start, _binary_rotary_bf16_o_end;
 extern "C" unsigned char _binary_paged_metadata_i32_o_start, _binary_paged_metadata_i32_o_end;
+extern "C" unsigned char _binary_token_indices_i32_o_start, _binary_token_indices_i32_o_end;
 
 namespace {
 constexpr const char* kAdd = "gk_add_bf16_v1";
@@ -26,6 +27,7 @@ constexpr const char* kKvStore = "gk_kv_store_bf16_v1";
 constexpr const char* kPagedGqa = "gk_paged_gqa_bf16_v1";
 constexpr const char* kRotary = "gk_rotary_bf16_v1";
 constexpr const char* kPagedMetadata = "gk_paged_metadata_i32_v1";
+constexpr const char* kTokenIndices = "gk_token_indices_i32_v1";
 int kind(const char* name) {
   if (!name) return -1;
   if (std::strcmp(name, kAdd) == 0) return 0;
@@ -36,6 +38,7 @@ int kind(const char* name) {
   if (std::strcmp(name, kPagedGqa) == 0) return 5;
   if (std::strcmp(name, kRotary) == 0) return 6;
   if (std::strcmp(name, kPagedMetadata) == 0) return 7;
+  if (std::strcmp(name, kTokenIndices) == 0) return 8;
   return -1;
 }
 
@@ -358,11 +361,48 @@ GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKerne
   std::memcpy(output->kernel.kernelElf, &_binary_paged_metadata_i32_o_start, size);
   return GLUE_SUCCESS;
 }
+GlueCodeReturn instantiate_token_indices(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  int32_t vocabulary = 0;
+  if (input->nodeParams.nodeParamsSize != sizeof(vocabulary) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&vocabulary, input->nodeParams.nodeParams, sizeof(vocabulary));
+  if (vocabulary <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& tokens = input->inputTensors[0].geometry;
+  const auto& header = input->inputTensors[1].geometry;
+  const auto bucket = tokens.maxSizes[1];
+  if (tokens.dataType != DATA_I32 || header.dataType != DATA_I32 || tokens.dims != 2 ||
+      (tokens.maxSizes[0] != 1 && tokens.maxSizes[0] != 2) ||
+      tokens.minSizes[0] != tokens.maxSizes[0] || !bucket || bucket > 4096 || tokens.minSizes[1] != bucket ||
+      header.dims != 1 || header.maxSizes[0] != 1 || header.minSizes[0] != 1)
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  for (unsigned i = 0; i < 2; ++i) {
+    const auto& result = input->outputTensors[i].geometry;
+    if (result.dataType != DATA_I32) return GLUE_INCOMPATIBLE_DATA_TYPE;
+    if (result.dims != 1 || result.maxSizes[0] != bucket || result.minSizes[0] != bucket)
+      return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  }
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = bucket;
+  for (unsigned i = 0; i < 2; ++i) {
+    output->inputTensorAccessPattern[i].allRequired = 1;
+    output->outputTensorAccessPattern[i].allRequired = 1;
+  }
+  output->kernel.paramsNr = 1;
+  std::memcpy(output->kernel.scalarParams, &vocabulary, sizeof(vocabulary));
+  const unsigned size = static_cast<unsigned>(&_binary_token_indices_i32_o_end - &_binary_token_indices_i32_o_start);
+  const unsigned capacity = output->kernel.elfSize;
+  output->kernel.elfSize = size;
+  if (capacity < size) return GLUE_INSUFFICIENT_ELF_BUFFER;
+  std::memcpy(output->kernel.kernelElf, &_binary_token_indices_i32_o_start, size);
+  return GLUE_SUCCESS;
+}
 }
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 8 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 9 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -371,6 +411,7 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 5) std::strcpy(guids[5].name, kPagedGqa);
   if (guids && *count && capacity > 6) std::strcpy(guids[6].name, kRotary);
   if (guids && *count && capacity > 7) std::strcpy(guids[7].name, kPagedMetadata);
+  if (guids && *count && capacity > 8) std::strcpy(guids[8].name, kTokenIndices);
   return GLUE_SUCCESS;
 }
 
@@ -384,6 +425,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 5) return instantiate_paged_gqa(input, output);
   if (id == 6) return instantiate_rotary(input, output);
   if (id == 7) return instantiate_paged_metadata(input, output);
+  if (id == 8) return instantiate_token_indices(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
