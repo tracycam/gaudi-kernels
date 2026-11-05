@@ -32,7 +32,7 @@ constexpr const char* kKvStore = "gk_kv_store_bf16_v1";
 constexpr const char* kPagedGqa = "gk_paged_gqa_bf16_v1";
 constexpr const char* kPagedGqaMmeGather = "gk_paged_gqa_mme_gather_bf16_v1";
 constexpr const char* kPagedGqaMmeSoftmax = "gk_paged_gqa_mme_softmax_bf16_v1";
-constexpr const char* kLinearRefine = "gk_linear_refine_bf16_v1";
+constexpr const char* kLinearRefine = "gk_linear_refine_bf16_v2";
 constexpr const char* kRotary = "gk_rotary_bf16_v1";
 constexpr const char* kPagedMetadata = "gk_paged_metadata_i32_v1";
 constexpr const char* kTokenIndices = "gk_token_indices_i32_v1";
@@ -398,7 +398,7 @@ GlueCodeReturn instantiate_paged_gqa_mme_softmax(HabanaKernelParams* input, Haba
 }
 
 GlueCodeReturn instantiate_linear_refine(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
-  if (input->inputTensorNr != 4) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->inputTensorNr != 6) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto matches = [](const auto& geometry, std::initializer_list<uint64_t> dims) {
@@ -421,10 +421,17 @@ GlueCodeReturn instantiate_linear_refine(HabanaKernelParams* input, HabanaKernel
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (!matches(input->outputTensors[0].geometry, {outputs, rows}))
     return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  for (unsigned i = 4; i < 6; ++i) {
+    const auto& geometry = input->inputTensors[i].geometry;
+    if (geometry.dataType != DATA_F32 || geometry.dims != 2 ||
+        geometry.maxSizes[0] != outputs || geometry.minSizes[0] != outputs ||
+        geometry.maxSizes[1] != rows || geometry.minSizes[1] != rows)
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
   output->indexSpaceRank = 2;
   output->indexSpaceGeometry[0] = outputs;
   output->indexSpaceGeometry[1] = rows;
-  for (unsigned i = 0; i < 4; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+  for (unsigned i = 0; i < 6; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
   auto& access = output->outputTensorAccessPattern[0];
   access.allRequired = 0;
   for (unsigned dim = 0; dim < 2; ++dim) {

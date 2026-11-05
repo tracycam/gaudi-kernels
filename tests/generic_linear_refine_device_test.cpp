@@ -121,8 +121,8 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
   append({partial0, partial1}, {sum}, nullptr, 0, "add_fwd_f32");
   append({full}, {tensors[2]}, nullptr, 0, "gk_cast_f32_to_bf16_v1");
   append({sum}, {tensors[3]}, nullptr, 0, "gk_cast_f32_to_bf16_v1");
-  append({tensors[0], tensors[1], tensors[2], tensors[3]}, {tensors[4]}, nullptr, 0,
-         "gk_linear_refine_bf16_v1");
+  append({tensors[0], tensors[1], tensors[2], tensors[3], full, sum}, {tensors[4]}, nullptr, 0,
+         "gk_linear_refine_bf16_v2");
   check(synGraphCompile(&recipe, graph, prefix.c_str(), nullptr));
   uint64_t workspace = 0;
   check(synWorkspaceGetSize(&workspace, recipe));
@@ -131,7 +131,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
   runtime.synchronize_compute();
   for (size_t i = 0; i < outputs.size(); ++i)
     arena.copy_d2h_sync(runtime.d2h_stream(), addresses[i + 2], outputs[i].data(), columns * 2);
-  size_t disagreements = 0, refined_wrong = 0, initial_wrong = 0;
+  size_t disagreements = 0, refined_wrong = 0, initial_wrong = 0, agreement_changes = 0;
   std::vector<uint16_t> references(columns);
   double error = 0, norm = 0, maximum = 0;
   for (uint32_t col = 0; col < columns; ++col) {
@@ -147,7 +147,8 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
       ++disagreements;
       refined_wrong += outputs[2][col] != reference;
     } else if (outputs[2][col] != outputs[0][col]) {
-      throw std::runtime_error("agreement output changed");
+      ++agreement_changes;
+      refined_wrong += outputs[2][col] != reference;
     }
     const auto delta = actual - expected;
     error += delta * delta;
@@ -156,7 +157,8 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
   }
   const double relative = std::sqrt(error / std::max(norm, 1e-60));
   std::cout << "linear refine width " << width << " columns " << columns << " disagreements " << disagreements
-            << " original_mismatches " << initial_wrong << " refined_disagreements_wrong " << refined_wrong
+            << " original_mismatches " << initial_wrong << " agreement_changes " << agreement_changes
+            << " refined_wrong " << refined_wrong
             << " relative_l2 " << relative << " max_abs " << maximum << std::endl;
   if (relative > 3e-3 || refined_wrong) throw std::runtime_error("linear refinement accuracy failed");
   check(synRecipeDestroy(recipe));
@@ -174,34 +176,42 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
   arena.copy_h2d_sync(runtime.h2d_stream(), alternatives.data(), addresses[3], columns * 2);
   graph = nullptr;
   recipe = nullptr;
-  tensors = {};
-  sections = {};
-  launch = {};
+  std::array<synTensor, 7> forced_tensors{};
+  std::array<synSectionHandle, 7> forced_sections{};
+  std::array<synLaunchTensorInfo, 7> forced_launch{};
+  std::array<std::string, 7> forced_names;
+  const std::array<uint64_t, 7> forced_addresses{
+      addresses[0], addresses[1], addresses[2], addresses[3], arena.allocate(columns * 4),
+      arena.allocate(columns * 4), addresses[4]};
+  const std::vector<float> far_from_midpoint(columns, 1.f);
+  arena.copy_h2d_sync(runtime.h2d_stream(), far_from_midpoint.data(), forced_addresses[4], columns * 4);
+  arena.copy_h2d_sync(runtime.h2d_stream(), far_from_midpoint.data(), forced_addresses[5], columns * 4);
   check(synGraphCreate(&graph, synDeviceGaudi2));
-  for (size_t i = 0; i < tensors.size(); ++i) {
-    names[i] = prefix + "_forced_t" + std::to_string(i);
-    check(synSectionCreate(&sections[i], 0, graph));
-    check(synSectionSetPersistent(sections[i], true));
+  for (size_t i = 0; i < forced_tensors.size(); ++i) {
+    forced_names[i] = prefix + "_forced_t" + std::to_string(i);
+    check(synSectionCreate(&forced_sections[i], 0, graph));
+    check(synSectionSetPersistent(forced_sections[i], true));
     synTensorDescriptor desc{};
-    desc.m_name = names[i].c_str();
-    desc.m_dataType = syn_type_bf16;
+    desc.m_name = forced_names[i].c_str();
+    desc.m_dataType = i == 4 || i == 5 ? syn_type_float : syn_type_bf16;
     desc.m_dims = 2;
     desc.m_sizes[0] = desc.m_minSizes[0] = i < 2 ? width : columns;
     desc.m_sizes[1] = desc.m_minSizes[1] = i == 1 ? columns : 1;
-    check(synTensorCreate(&tensors[i], &desc, sections[i], 0));
-    launch[i].tensorName = names[i].c_str();
-    launch[i].tensorType = DATA_TENSOR;
-    launch[i].pTensorAddress = addresses[i];
-    launch[i].tensorSize[0] = desc.m_sizes[0];
-    launch[i].tensorSize[1] = desc.m_sizes[1];
+    check(synTensorCreate(&forced_tensors[i], &desc, forced_sections[i], 0));
+    forced_launch[i].tensorName = forced_names[i].c_str();
+    forced_launch[i].tensorType = DATA_TENSOR;
+    forced_launch[i].pTensorAddress = forced_addresses[i];
+    forced_launch[i].tensorSize[0] = desc.m_sizes[0];
+    forced_launch[i].tensorSize[1] = desc.m_sizes[1];
   }
   const auto forced_node = prefix + "_forced_n0";
-  check(synNodeCreate(graph, tensors.data(), &tensors[4], 4, 1, nullptr, 0,
-                      "gk_linear_refine_bf16_v1", forced_node.c_str(), nullptr, nullptr));
+  check(synNodeCreate(graph, forced_tensors.data(), &forced_tensors[6], 6, 1, nullptr, 0,
+                      "gk_linear_refine_bf16_v2", forced_node.c_str(), nullptr, nullptr));
   check(synGraphCompile(&recipe, graph, (prefix + "_forced").c_str(), nullptr));
   check(synWorkspaceGetSize(&workspace, recipe));
-  initialize_launch_tensor_ids(recipe, launch.data(), launch.size());
-  check(synLaunch(runtime.compute_stream(), launch.data(), launch.size(), arena.ensure_workspace(workspace), recipe, 0));
+  initialize_launch_tensor_ids(recipe, forced_launch.data(), forced_launch.size());
+  check(synLaunch(runtime.compute_stream(), forced_launch.data(), forced_launch.size(),
+                  arena.ensure_workspace(workspace), recipe, 0));
   runtime.synchronize_compute();
   arena.copy_d2h_sync(runtime.d2h_stream(), addresses[4], outputs[2].data(), columns * 2);
   for (uint32_t col = 0; col < columns; ++col) {
@@ -211,8 +221,8 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t colum
   std::cout << "forced compensated rows " << forced << " passed" << std::endl;
   check(synRecipeDestroy(recipe));
   check(synGraphDestroy(graph));
-  for (auto tensor : tensors) check(synTensorDestroy(tensor));
-  for (auto section : sections) check(synSectionDestroy(section));
+  for (auto tensor : forced_tensors) check(synTensorDestroy(tensor));
+  for (auto section : forced_sections) check(synSectionDestroy(section));
 }
 }  // namespace
 
