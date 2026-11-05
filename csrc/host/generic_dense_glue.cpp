@@ -36,6 +36,8 @@ constexpr const char* kLinearRefine = "gk_linear_refine_bf16_v2";
 constexpr const char* kRotary = "gk_rotary_bf16_v1";
 constexpr const char* kPagedMetadata = "gk_paged_metadata_i32_v1";
 constexpr const char* kTokenIndices = "gk_token_indices_i32_v1";
+constexpr const char* kSchedulerMetadata = "gk_scheduler_metadata_i32_v1";
+constexpr const char* kSchedulerTokens = "gk_scheduler_tokens_i32_v1";
 constexpr const char* kCastF32ToBf16 = "gk_cast_f32_to_bf16_v1";
 constexpr const char* kIndexPutI64 = "gk_index_put_i64_v1";
 int kind(const char* name) {
@@ -54,6 +56,8 @@ int kind(const char* name) {
   if (std::strcmp(name, kPagedGqaMmeGather) == 0) return 11;
   if (std::strcmp(name, kPagedGqaMmeSoftmax) == 0) return 12;
   if (std::strcmp(name, kLinearRefine) == 0) return 13;
+  if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
+  if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   return -1;
 }
 
@@ -502,7 +506,8 @@ GlueCodeReturn instantiate_rotary(HabanaKernelParams* input, HabanaKernelInstant
   return GLUE_SUCCESS;
 }
 
-GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                          bool scheduler_owned) {
   if (input->inputTensorNr != 6) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 4) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   int32_t slots = 0;
@@ -541,8 +546,9 @@ GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKerne
   output->indexSpaceGeometry[0] = bucket;
   for (unsigned i = 0; i < 6; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
   for (unsigned i = 0; i < 4; ++i) output->outputTensorAccessPattern[i].allRequired = 1;
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &slots, sizeof(slots));
+  const int32_t params[] = {slots, scheduler_owned ? 1 : 0};
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, params, sizeof(params));
   const unsigned size = static_cast<unsigned>(&_binary_paged_metadata_i32_o_end - &_binary_paged_metadata_i32_o_start);
   const unsigned capacity = output->kernel.elfSize;
   output->kernel.elfSize = size;
@@ -550,7 +556,8 @@ GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKerne
   std::memcpy(output->kernel.kernelElf, &_binary_paged_metadata_i32_o_start, size);
   return GLUE_SUCCESS;
 }
-GlueCodeReturn instantiate_token_indices(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+GlueCodeReturn instantiate_token_indices(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                         bool scheduler_owned) {
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   int32_t vocabulary = 0;
@@ -578,8 +585,9 @@ GlueCodeReturn instantiate_token_indices(HabanaKernelParams* input, HabanaKernel
     output->inputTensorAccessPattern[i].allRequired = 1;
     output->outputTensorAccessPattern[i].allRequired = 1;
   }
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &vocabulary, sizeof(vocabulary));
+  const int32_t params[] = {vocabulary, scheduler_owned ? 1 : 0};
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, params, sizeof(params));
   const unsigned size = static_cast<unsigned>(&_binary_token_indices_i32_o_end - &_binary_token_indices_i32_o_start);
   const unsigned capacity = output->kernel.elfSize;
   output->kernel.elfSize = size;
@@ -662,7 +670,7 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 14 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 16 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -677,6 +685,8 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 11) std::strcpy(guids[11].name, kPagedGqaMmeGather);
   if (guids && *count && capacity > 12) std::strcpy(guids[12].name, kPagedGqaMmeSoftmax);
   if (guids && *count && capacity > 13) std::strcpy(guids[13].name, kLinearRefine);
+  if (guids && *count && capacity > 14) std::strcpy(guids[14].name, kSchedulerMetadata);
+  if (guids && *count && capacity > 15) std::strcpy(guids[15].name, kSchedulerTokens);
   return GLUE_SUCCESS;
 }
 
@@ -689,8 +699,8 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 4) return instantiate_kv_store(input, output);
   if (id == 5) return instantiate_paged_gqa(input, output);
   if (id == 6) return instantiate_rotary(input, output);
-  if (id == 7) return instantiate_paged_metadata(input, output);
-  if (id == 8) return instantiate_token_indices(input, output);
+  if (id == 7 || id == 14) return instantiate_paged_metadata(input, output, id == 14);
+  if (id == 8 || id == 15) return instantiate_token_indices(input, output, id == 15);
   if (id == 9) return instantiate_cast_f32_to_bf16(input, output);
   if (id == 10) return instantiate_index_put_i64(input, output);
   if (id == 11) return instantiate_paged_gqa_mme_gather(input, output);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Validate the active token IDs and zero the remainder of the static bucket.
-void main(tensor tokens, tensor header, tensor indices, tensor status, int vocabulary) {
+void main(tensor tokens, tensor header, tensor indices, tensor status, int vocabulary, int scheduler_owned) {
   const int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   const int5 zero = {0, 0, 0, 0, 0};
   const int valid_rows = s_i32_ld_g(gen_addr(zero, header));
@@ -11,11 +11,11 @@ void main(tensor tokens, tensor header, tensor indices, tensor status, int vocab
     if (row < valid_rows) {
       int5 input_pos = {0, row, 0, 0, 0};
       value = s_i32_ld_g(gen_addr(input_pos, tokens));
-      if (lanes == 2) {
+      if (!scheduler_owned && lanes == 2) {
         input_pos[0] = 1;
         if (s_i32_ld_g(gen_addr(input_pos, tokens)) != 0) error = 1;
       }
-      if (value < 0 || value >= vocabulary) error = 1;
+      if (!scheduler_owned && (value < 0 || value >= vocabulary)) error = 1;
     }
     s_i32_st_g(gen_addr(output_pos, indices), error ? 0 : value);
     s_i32_st_g(gen_addr(output_pos, status), error);

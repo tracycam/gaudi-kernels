@@ -13,7 +13,7 @@ static inline int read_control(tensor value, int row) {
 // Validate scheduler metadata once per batch and expand request IDs on device.
 void main(tensor locations, tensor batch_requests, tensor positions, tensor mapping,
           tensor header, tensor info, tensor row_locations, tensor row_requests,
-          tensor row_positions, tensor status, int slots) {
+          tensor row_positions, tensor status, int slots, int scheduler_owned) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   int5 zero = {0, 0, 0, 0, 0};
   const int valid_rows = s_i32_ld_g(gen_addr(zero, header));
@@ -34,6 +34,15 @@ void main(tensor locations, tensor batch_requests, tensor positions, tensor mapp
     int5 expected_pos = {1 + bucket + row, 0, 0, 0, 0};
     const int batch = s_i32_ld_g(gen_addr(batch_pos, info));
     const int expected = s_i32_ld_g(gen_addr(expected_pos, info));
+    if (scheduler_owned) {
+      // The scheduler constructs these slots and request IDs; its host lengths
+      // already determine each position. The checked public path remains below.
+      s_i32_st_g(gen_addr(row_pos, row_locations), read_control(locations, row));
+      s_i32_st_g(gen_addr(row_pos, row_requests), read_control(batch_requests, batch));
+      s_i32_st_g(gen_addr(row_pos, row_positions), expected);
+      s_i32_st_g(gen_addr(row_pos, status), 0);
+      continue;
+    }
     int error = 0, request = 0;
     const int slot = read_control(locations, row);
     const int position = read_control(positions, row);
