@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <tpc_kernel_lib_interface.h>
 
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -13,6 +14,7 @@ extern "C" unsigned char _binary_rms_norm_bf16_o_start, _binary_rms_norm_bf16_o_
 extern "C" unsigned char _binary_silu_and_mul_bf16_o_start, _binary_silu_and_mul_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_bf16_o_start, _binary_kv_store_bf16_o_end;
 extern "C" unsigned char _binary_paged_gqa_bf16_o_start, _binary_paged_gqa_bf16_o_end;
+extern "C" unsigned char _binary_rotary_bf16_o_start, _binary_rotary_bf16_o_end;
 
 namespace {
 constexpr const char* kAdd = "gk_add_bf16_v1";
@@ -21,6 +23,7 @@ constexpr const char* kNorm = "gk_rms_norm_bf16_v1";
 constexpr const char* kSilu = "gk_silu_and_mul_bf16_v1";
 constexpr const char* kKvStore = "gk_kv_store_bf16_v1";
 constexpr const char* kPagedGqa = "gk_paged_gqa_bf16_v1";
+constexpr const char* kRotary = "gk_rotary_bf16_v1";
 int kind(const char* name) {
   if (!name) return -1;
   if (std::strcmp(name, kAdd) == 0) return 0;
@@ -29,6 +32,7 @@ int kind(const char* name) {
   if (std::strcmp(name, kSilu) == 0) return 3;
   if (std::strcmp(name, kKvStore) == 0) return 4;
   if (std::strcmp(name, kPagedGqa) == 0) return 5;
+  if (std::strcmp(name, kRotary) == 0) return 6;
   return -1;
 }
 
@@ -249,17 +253,71 @@ GlueCodeReturn instantiate_paged_gqa(HabanaKernelParams* input, HabanaKernelInst
   std::memcpy(output->kernel.kernelElf, &_binary_paged_gqa_bf16_o_start, size);
   return GLUE_SUCCESS;
 }
+
+GlueCodeReturn instantiate_rotary(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 5) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  struct Params { int32_t head_dim; int32_t rotary_dim; int32_t is_neox; } params{};
+  if (input->nodeParams.nodeParamsSize != sizeof(params) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&params, input->nodeParams.nodeParams, sizeof(params));
+  if (params.head_dim <= 0 || params.rotary_dim <= 0 || params.rotary_dim > params.head_dim ||
+      params.rotary_dim % 2 || (params.is_neox != 0 && params.is_neox != 1))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& query = input->inputTensors[0].geometry;
+  const auto& key = input->inputTensors[1].geometry;
+  const auto& positions = input->inputTensors[2].geometry;
+  const auto& cache = input->inputTensors[3].geometry;
+  const auto& metadata = input->inputTensors[4].geometry;
+  if (query.dataType != DATA_BF16 || key.dataType != DATA_BF16 || cache.dataType != DATA_BF16 ||
+      positions.dataType != DATA_I32 || metadata.dataType != DATA_I32 ||
+      input->outputTensors[0].geometry.dataType != DATA_BF16 ||
+      input->outputTensors[1].geometry.dataType != DATA_BF16) return GLUE_INCOMPATIBLE_DATA_TYPE;
+  for (const auto* tensor : {&query, &key}) {
+    if (tensor->dims != 2 || !tensor->maxSizes[0] || tensor->maxSizes[0] > INT_MAX ||
+        tensor->maxSizes[0] % params.head_dim || !tensor->maxSizes[1] || tensor->maxSizes[1] > 4096 ||
+        tensor->minSizes[0] != tensor->maxSizes[0] || tensor->minSizes[1] != tensor->maxSizes[1])
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
+  if (key.maxSizes[1] != query.maxSizes[1] || positions.dims != 1 ||
+      positions.maxSizes[0] != query.maxSizes[1] || positions.minSizes[0] != positions.maxSizes[0] ||
+      metadata.dims != 1 || metadata.maxSizes[0] != 1 || metadata.minSizes[0] != 1 ||
+      cache.dims != 2 || cache.maxSizes[0] != static_cast<unsigned>(params.rotary_dim) ||
+      cache.minSizes[0] != cache.maxSizes[0] || !cache.maxSizes[1] || cache.maxSizes[1] > INT_MAX ||
+      cache.minSizes[1] != cache.maxSizes[1]) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  for (unsigned i = 0; i < 2; ++i) {
+    const auto& source = input->inputTensors[i].geometry;
+    const auto& result = input->outputTensors[i].geometry;
+    if (result.dims != 2 || result.maxSizes[0] != source.maxSizes[0] ||
+        result.maxSizes[1] != source.maxSizes[1] || result.minSizes[0] != result.maxSizes[0] ||
+        result.minSizes[1] != result.maxSizes[1]) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  }
+  output->indexSpaceRank = 2;
+  output->indexSpaceGeometry[0] = std::max(query.maxSizes[0], key.maxSizes[0]) / params.head_dim;
+  output->indexSpaceGeometry[1] = query.maxSizes[1];
+  for (unsigned i = 0; i < 5; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+  for (unsigned i = 0; i < 2; ++i) output->outputTensorAccessPattern[i].allRequired = 1;
+  output->kernel.paramsNr = 3;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
+  const unsigned size = static_cast<unsigned>(&_binary_rotary_bf16_o_end - &_binary_rotary_bf16_o_start);
+  const unsigned capacity = output->kernel.elfSize;
+  output->kernel.elfSize = size;
+  if (capacity < size) return GLUE_INSUFFICIENT_ELF_BUFFER;
+  std::memcpy(output->kernel.kernelElf, &_binary_rotary_bf16_o_start, size);
+  return GLUE_SUCCESS;
+}
 }
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 6 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 7 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
   if (guids && *count && capacity > 3) std::strcpy(guids[3].name, kSilu);
   if (guids && *count && capacity > 4) std::strcpy(guids[4].name, kKvStore);
   if (guids && *count && capacity > 5) std::strcpy(guids[5].name, kPagedGqa);
+  if (guids && *count && capacity > 6) std::strcpy(guids[6].name, kRotary);
   return GLUE_SUCCESS;
 }
 
@@ -271,6 +329,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 3) return instantiate_silu(input, output);
   if (id == 4) return instantiate_kv_store(input, output);
   if (id == 5) return instantiate_paged_gqa(input, output);
+  if (id == 6) return instantiate_rotary(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
