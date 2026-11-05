@@ -24,7 +24,55 @@ void main(tensor query, tensor key_pool, tensor value_pool, tensor request_ids,
       const int kv_offset = (head / ratio) * head_dim;
       float64 maximum = negative_infinity, denominator = 0.f;
       float128 accumulator = {0.f, 0.f};
-      for (int token = 0; token <= position; ++token) {
+      int token = 0;
+      for (; token + 3 <= position; token += 4) {
+        // Load four causal slots before updating the online softmax.
+        int5 map0 = {token, request, 0, 0, 0};
+        int5 map1 = {token + 1, request, 0, 0, 0};
+        int5 map2 = {token + 2, request, 0, 0, 0};
+        int5 map3 = {token + 3, request, 0, 0, 0};
+        int5 kv0 = {kv_offset, s_i32_ld_g(gen_addr(map0, request_to_token)), 0, 0, 0};
+        int5 kv1 = {kv_offset, s_i32_ld_g(gen_addr(map1, request_to_token)), 0, 0, 0};
+        int5 kv2 = {kv_offset, s_i32_ld_g(gen_addr(map2, request_to_token)), 0, 0, 0};
+        int5 kv3 = {kv_offset, s_i32_ld_g(gen_addr(map3, request_to_token)), 0, 0, 0};
+        const bfloat128 k0 = v_bf16_ld_tnsr_partial_b(kv0, key_pool, (char)(head_dim - 1), 0);
+        const bfloat128 k1 = v_bf16_ld_tnsr_partial_b(kv1, key_pool, (char)(head_dim - 1), 0);
+        const bfloat128 k2 = v_bf16_ld_tnsr_partial_b(kv2, key_pool, (char)(head_dim - 1), 0);
+        const bfloat128 k3 = v_bf16_ld_tnsr_partial_b(kv3, key_pool, (char)(head_dim - 1), 0);
+        const float128 p0 = v_bf16_mac_acc32_b(q, k0, (float128){0.f, 0.f});
+        const float128 p1 = v_bf16_mac_acc32_b(q, k1, (float128){0.f, 0.f});
+        const float128 p2 = v_bf16_mac_acc32_b(q, k2, (float128){0.f, 0.f});
+        const float128 p3 = v_bf16_mac_acc32_b(q, k3, (float128){0.f, 0.f});
+        const float64 s0 = v_f32_reduce_add(p0.v1 + p0.v2) * scale;
+        const float64 s1 = v_f32_reduce_add(p1.v1 + p1.v2) * scale;
+        const float64 s2 = v_f32_reduce_add(p2.v1 + p2.v2) * scale;
+        const float64 s3 = v_f32_reduce_add(p3.v1 + p3.v2) * scale;
+        float64 next_max = maximum;
+        next_max = v_f32_max_b(next_max, s0);
+        next_max = v_f32_max_b(next_max, s1);
+        next_max = v_f32_max_b(next_max, s2);
+        next_max = v_f32_max_b(next_max, s3);
+        const float64 old_weight = tpc_exp_f32_safe(maximum - next_max);
+        const float64 w0 = tpc_exp_f32_safe(s0 - next_max);
+        const float64 w1 = tpc_exp_f32_safe(s1 - next_max);
+        const float64 w2 = tpc_exp_f32_safe(s2 - next_max);
+        const float64 w3 = tpc_exp_f32_safe(s3 - next_max);
+        const float128 v0 = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(kv0, value_pool, (char)(head_dim - 1), 0));
+        const float128 v1 = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(kv1, value_pool, (char)(head_dim - 1), 0));
+        const float128 v2 = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(kv2, value_pool, (char)(head_dim - 1), 0));
+        const float128 v3 = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(kv3, value_pool, (char)(head_dim - 1), 0));
+        accumulator.v1 = v_f32_mac_b(v0.v1, w0, accumulator.v1 * old_weight);
+        accumulator.v2 = v_f32_mac_b(v0.v2, w0, accumulator.v2 * old_weight);
+        accumulator.v1 = v_f32_mac_b(v1.v1, w1, accumulator.v1);
+        accumulator.v2 = v_f32_mac_b(v1.v2, w1, accumulator.v2);
+        accumulator.v1 = v_f32_mac_b(v2.v1, w2, accumulator.v1);
+        accumulator.v2 = v_f32_mac_b(v2.v2, w2, accumulator.v2);
+        accumulator.v1 = v_f32_mac_b(v3.v1, w3, accumulator.v1);
+        accumulator.v2 = v_f32_mac_b(v3.v2, w3, accumulator.v2);
+        denominator = v_f32_mac_b(denominator, old_weight, w0) + w1 + w2 + w3;
+        maximum = next_max;
+      }
+      for (; token <= position; ++token) {
         int5 map_pos = {token, request, 0, 0, 0};
         const int slot = s_i32_ld_g(gen_addr(map_pos, request_to_token));
         int5 kv_pos = {kv_offset, slot, 0, 0, 0};
