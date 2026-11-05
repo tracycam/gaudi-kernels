@@ -25,7 +25,8 @@ def main():
                          ("rotary_bf16", "generic_dense/rotary_bf16.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
-                         ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c")):
+                         ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c"),
+                         ("index_put_i64", "generic_dense/index_put_i64.c")):
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
