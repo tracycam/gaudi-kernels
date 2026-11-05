@@ -24,6 +24,7 @@ def main():
                          ("paged_gqa_bf16", "generic_dense/paged_gqa_bf16.c"),
                          ("paged_gqa_mme_gather_bf16", "generic_dense/paged_gqa_mme_gather_bf16.c"),
                          ("paged_gqa_mme_softmax_bf16", "generic_dense/paged_gqa_mme_softmax_bf16.c"),
+                         ("linear_refine_bf16", "generic_dense/linear_refine_bf16.c"),
                          ("rotary_bf16", "generic_dense/rotary_bf16.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
