@@ -332,13 +332,12 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
         std::array<float, 128> acc32{};
         double denominator64 = 0;
         float denominator32 = 0;
-        for (int token = 0; token < length; ++token)
-          denominator32 += std::exp(scores32[token] - max32);
         for (int token = 0; token < length; ++token) {
           const int slot = mapping[request * context + token];
           const double weight64 = std::exp(scores64[token] - max64);
-          const float weight32 = widen(bf16(std::exp(scores32[token] - max32) / denominator32));
+          const float weight32 = std::exp(scores32[token] - max32);
           denominator64 += weight64;
+          denominator32 += weight32;
           for (uint32_t col = 0; col < head_dim; ++col) {
             const float v = widen(value[static_cast<size_t>(slot) * kv_width + kv_head * head_dim + col]);
             acc64[col] += weight64 * v;
@@ -347,7 +346,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
         }
         for (uint32_t col = 0; col < head_dim; ++col) {
           const double truth = widen(bf16_direct(acc64[col] / denominator64));
-          const double reference32 = widen(bf16(acc32[col]));
+          const double reference32 = widen(bf16(acc32[col] / denominator32));
           const double result = widen(actual[static_cast<size_t>(row) * q_width + head * head_dim + col]);
           if (!std::isfinite(result) || !std::isfinite(truth) || !std::isfinite(reference32))
             throw std::runtime_error("nonfinite attention result");
