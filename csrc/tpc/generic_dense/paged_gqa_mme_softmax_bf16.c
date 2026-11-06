@@ -2,9 +2,9 @@
 #include "../common/tpc_math_safe.h"
 #include "../moe_router/precise_ratio.h"
 
-// Online FP32 causal softmax; two BF16 parts preserve the MME probability boundary.
+// Online FP32 causal softmax with one BF16 probability output.
 void main(tensor scores, tensor positions, tensor metadata, tensor probabilities,
-          tensor corrections, int kv_heads, float scale) {
+          int kv_heads, float scale) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   int5 zero = {0, 0, 0, 0, 0};
   const int valid_rows = s_i32_ld_g(gen_addr(zero, metadata));
@@ -55,13 +55,9 @@ void main(tensor scores, tensor positions, tensor metadata, tensor probabilities
         b = v_f32_sel_less_u32_b(lane, valid1, tpc_exp_f32_safe(b - maximum), 0.f);
         float128 pair = {router_precise_ratio(a, sum), router_precise_ratio(b, sum)};
         bfloat128 high = convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE);
-        float128 reconstructed = convert_bfloat128_to_float128(high, SW_LINEAR);
-        float128 low = {pair.v1 - reconstructed.v1, pair.v2 - reconstructed.v2};
         pos[0] = start;
         const char count = (char)(s_i32_min(128, context - start) - 1);
         v_bf16_st_tnsr_partial(pos, probabilities, high, count, 0);
-        v_bf16_st_tnsr_partial(pos, corrections, convert_float128_to_bfloat128(low, SW_LINEAR | SW_RHNE),
-                              count, 0);
       }
     }
   }

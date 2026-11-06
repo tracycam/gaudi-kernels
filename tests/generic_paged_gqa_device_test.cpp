@@ -135,7 +135,7 @@ void write_and_audit(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, ui
 
 void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_heads,
          uint32_t head_dim, uint32_t rows, uint32_t context, bool write_first = false,
-         bool use_mme = false, uint32_t position_limit = UINT32_MAX) {
+         uint32_t position_limit = UINT32_MAX) {
   constexpr uint32_t requests = 4;
   constexpr uint16_t sentinel = 0x3e80;
   const uint32_t bucket = std::bit_ceil(rows);
@@ -185,7 +185,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
   std::array<synLaunchTensorInfo, 8> launch{};
   const std::string prefix = "generic_gqa_q" + std::to_string(q_heads) + "_d" + std::to_string(head_dim) +
                              "_b" + std::to_string(bucket) + "_c" + std::to_string(context) +
-                             "_kv" + std::to_string(kv_heads) + (use_mme ? "_mme" : "_tpc") +
+                             "_kv" + std::to_string(kv_heads) + "_mme" +
                              (write_first ? "_chain" : "");
   std::array<std::string, 8> names;
   check(synGraphCreate(&graph, synDeviceGaudi2));
@@ -213,7 +213,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
   std::vector<synTensor> intermediates;
   std::vector<std::string> temporary_names;
   temporary_names.reserve(16);
-  if (use_mme) {
+  {
     auto intermediate = [&](synDataType type, std::initializer_list<uint64_t> dims) {
       temporary_names.push_back(prefix + "_i" + std::to_string(temporary_names.size()));
       synTensorDescriptor desc{};
@@ -242,10 +242,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
     auto query3 = intermediate(syn_type_bf16, {head_dim, ratio, groups});
     auto scores = intermediate(syn_type_float, {context, ratio, groups});
     auto probability = intermediate(syn_type_bf16, {context, ratio, groups});
-    auto correction = intermediate(syn_type_bf16, {context, ratio, groups});
     auto main_context = intermediate(syn_type_float, {head_dim, ratio, groups});
-    auto correction_context = intermediate(syn_type_float, {head_dim, ratio, groups});
-    auto sum_context = intermediate(syn_type_float, {head_dim, ratio, groups});
     auto flat_context = intermediate(syn_type_float, {q_width, bucket});
     const int32_t dimension = head_dim;
     append({tensors[1], tensors[2], tensors[3], tensors[4], tensors[5], tensors[6]},
@@ -256,18 +253,12 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
     const synGEMMParams qk{false, true};
     append({query3, key3}, {scores}, &qk, sizeof(qk), "batch_gemm");
     struct SoftmaxParams { int32_t kv_heads; float scale; } softmax{static_cast<int32_t>(kv_heads), params.scale};
-    append({scores, tensors[4], tensors[6]}, {probability, correction},
+    append({scores, tensors[4], tensors[6]}, {probability},
            &softmax, sizeof(softmax), "gk_paged_gqa_mme_softmax_bf16_v1");
     const synGEMMParams pv{false, false};
     append({probability, value3}, {main_context}, &pv, sizeof(pv), "batch_gemm");
-    append({correction, value3}, {correction_context}, &pv, sizeof(pv), "batch_gemm");
-    append({main_context, correction_context}, {sum_context}, nullptr, 0, "add_fwd_f32");
-    append({sum_context}, {flat_context}, nullptr, 0, "reshape");
+    append({main_context}, {flat_context}, nullptr, 0, "reshape");
     append({flat_context}, {tensors[7]}, nullptr, 0, "gk_cast_f32_to_bf16_v1");
-  } else {
-    const auto node = prefix + "_n0";
-    check(synNodeCreate(graph, tensors.data(), &tensors[7], 7, 1, &params, sizeof(params),
-                        "gk_paged_gqa_bf16_v1", node.c_str(), nullptr, nullptr));
   }
   check(synGraphCompile(&recipe, graph, prefix.c_str(), nullptr));
   uint64_t workspace = 0;
@@ -286,7 +277,6 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
       const auto replay_key = std::make_tuple(q_heads, kv_heads, head_dim, context, write_first, static_cast<uint32_t>(positions[0]));
       const auto [it, inserted] = replay_rows.emplace(replay_key, first_row);
       if (!inserted && it->second != first_row) {
-        if (!use_mme) throw std::runtime_error("M=1 and dynamic-bucket first rows differ for the same prefix");
         double norm = 0, difference = 0, maximum = 0;
         size_t changed = 0;
         for (size_t i = 0; i < first_row.size(); ++i) {
@@ -299,10 +289,10 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
           changed += first_row[i] != it->second[i];
         }
         const double relative = std::sqrt(difference / std::max(norm, 1e-60));
-        std::cout << "MME/TPC same-prefix q_heads " << q_heads << " context " << context
+        std::cout << "MME same-prefix q_heads " << q_heads << " context " << context
                   << " changed " << changed << " relative_l2 " << relative
                   << " max_abs " << maximum << std::endl;
-        if (relative > 3e-3) throw std::runtime_error("MME/TPC same-prefix row exceeds numerical gate");
+        if (relative > 3e-3) throw std::runtime_error("MME same-prefix row exceeds numerical gate");
       }
       if (rows > 1 && !std::equal(first_row.begin(), first_row.end(),
                                   actual.begin() + static_cast<size_t>(rows - 1) * q_width))
@@ -370,7 +360,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
       max_error = std::max(max_error, std::sqrt(row_error) / denom);
       max_floor = std::max(max_floor, std::sqrt(row_floor) / denom);
     }
-    std::cout << (use_mme ? "MME " : "TPC ") << "q_heads " << q_heads << " kv_heads " << kv_heads << " head_dim " << head_dim
+    std::cout << "MME q_heads " << q_heads << " kv_heads " << kv_heads << " head_dim " << head_dim
               << " bucket " << bucket << " valid_rows " << valid << " max_context " << context
               << " max_row_relative_l2 " << max_error << " cpu_fp32_floor " << max_floor
               << " max_abs " << max_absolute << " tail_changed " << tail_changes << std::endl;
@@ -391,22 +381,14 @@ int main() {
       throw std::runtime_error("FP64-to-BF16 midpoint check failed");
     DeviceRuntime runtime({});
     HbmArena arena(runtime.device_id(), 256ULL * 1024 * 1024);
-    for (const auto rows : {1u, 7u, 33u, 137u, 1025u}) {
-      run(runtime, arena, 56, 8, 128, rows, 37);
-      run(runtime, arena, 32, 8, 64, rows, 37);
-    }
-    run(runtime, arena, 56, 8, 128, 1, 1053);
-    run(runtime, arena, 56, 8, 128, 137, 1053);
-    run(runtime, arena, 56, 8, 128, 1, 4096);
-    run(runtime, arena, 56, 8, 128, 137, 37, true);
     for (const auto context : {1u, 37u, 63u, 64u, 65u, 127u, 128u, 129u, 137u, 1053u, 4096u})
-      run(runtime, arena, 56, 8, 128, 1, context, false, true);
+      run(runtime, arena, 56, 8, 128, 1, context);
     for (const auto context : {37u, 137u, 1053u})
-      run(runtime, arena, 32, 8, 64, 1, context, false, true);
+      run(runtime, arena, 32, 8, 64, 1, context);
     for (const auto geometry : {std::pair{8u, 8u}, std::pair{16u, 1u}, std::pair{12u, 4u}})
-      run(runtime, arena, geometry.first, geometry.second, 128, 1, 137, false, true);
-    run(runtime, arena, 56, 8, 128, 1, 4096, false, true, 18);
-    run(runtime, arena, 56, 8, 128, 1, 137, true, true);
+      run(runtime, arena, geometry.first, geometry.second, 128, 1, 137);
+    run(runtime, arena, 56, 8, 128, 1, 4096, false, 18);
+    run(runtime, arena, 56, 8, 128, 1, 137, true);
     std::cout << "paged GQA frozen-input numerical and tail gate passed\n";
     return 0;
   } catch (const std::exception& error) {
