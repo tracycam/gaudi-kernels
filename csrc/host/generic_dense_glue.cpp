@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <tpc_kernel_lib_interface.h>
+#include "generic_attention_glue.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -45,6 +46,9 @@ int kind(const char* name) {
   if (std::strcmp(name, kIndexPutI64) == 0) return 10;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
+  if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
+  if (std::strcmp(name, generic_attention::kMerge) == 0) return 17;
+  if (std::strcmp(name, generic_attention::kFinalize) == 0) return 18;
   return -1;
 }
 
@@ -415,7 +419,7 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 12 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 15 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -428,6 +432,9 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 9) std::strcpy(guids[9].name, kIndexPutI64);
   if (guids && *count && capacity > 10) std::strcpy(guids[10].name, kSchedulerMetadata);
   if (guids && *count && capacity > 11) std::strcpy(guids[11].name, kSchedulerTokens);
+  if (guids && *count && capacity > 12) std::strcpy(guids[12].name, generic_attention::kSoftmax);
+  if (guids && *count && capacity > 13) std::strcpy(guids[13].name, generic_attention::kMerge);
+  if (guids && *count && capacity > 14) std::strcpy(guids[14].name, generic_attention::kFinalize);
   return GLUE_SUCCESS;
 }
 
@@ -443,6 +450,8 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 8 || id == 15) return instantiate_token_indices(input, output, id == 15);
   if (id == 9) return instantiate_cast_f32_to_bf16(input, output);
   if (id == 10) return instantiate_index_put_i64(input, output);
+  if (id == 16) return generic_attention::instantiate_softmax(input, output);
+  if (id == 17 || id == 18) return generic_attention::instantiate_online(input, output, id == 17);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;

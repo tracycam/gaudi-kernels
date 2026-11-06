@@ -29,11 +29,12 @@ int main(int argc, char** argv) {
         "gk_add_bf16_v1", "gk_fused_add_rms_norm_bf16_v1", "gk_rms_norm_bf16_v1",
         "gk_silu_and_mul_bf16_v1", "gk_kv_store_bf16_v1", "gk_rotary_bf16_v1",
         "gk_paged_metadata_i32_v1", "gk_token_indices_i32_v1", "gk_cast_f32_to_bf16_v1",
-        "gk_index_put_i64_v1", "gk_scheduler_metadata_i32_v1", "gk_scheduler_tokens_i32_v1"};
+        "gk_index_put_i64_v1", "gk_scheduler_metadata_i32_v1", "gk_scheduler_tokens_i32_v1",
+        "gk_attn_tile_softmax_bf16_v1", "gk_attn_online_merge_f32_v1", "gk_attn_online_finalize_bf16_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
     dlclose(library);
-    std::cout << "generic provider exposes 12 expected GUIDs; old attention GUIDs absent\n";
+    std::cout << "generic provider exposes 15 expected GUIDs; old attention GUIDs absent\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
