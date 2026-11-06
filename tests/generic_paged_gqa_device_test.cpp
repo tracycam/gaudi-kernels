@@ -375,12 +375,19 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t q_heads, uint32_t kv_
 }
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
     if (bf16_direct(1.0 + std::ldexp(1.0, -8) + std::ldexp(1.0, -32)) != 0x3f81)
       throw std::runtime_error("FP64-to-BF16 midpoint check failed");
     DeviceRuntime runtime({});
     HbmArena arena(runtime.device_id(), 256ULL * 1024 * 1024);
+    if (argc == 2) {
+      const auto context = std::stoul(argv[1]);
+      if (!context || context > 4096) throw std::invalid_argument("context must be in 1..4096");
+      run(runtime, arena, 56, 8, 128, 1, static_cast<uint32_t>(context));
+      return 0;
+    }
+    if (argc != 1) throw std::invalid_argument("expected an optional context length");
     for (const auto context : {1u, 37u, 63u, 64u, 65u, 127u, 128u, 129u, 137u, 1053u, 4096u})
       run(runtime, arena, 56, 8, 128, 1, context);
     for (const auto context : {37u, 137u, 1053u})
