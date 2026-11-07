@@ -2,8 +2,30 @@
 
 import argparse
 from pathlib import Path
+import re
 import shutil
 import subprocess
+import tempfile
+
+
+def verify_kv_store_abi(obj, source):
+    # Tensor arguments determine TPC descriptor slots.  A stale experimental
+    # ELF with extra inputs makes the four-input/two-output glue write through
+    # unbound slots, so verify the source embedded in the actual built object.
+    with tempfile.TemporaryDirectory() as temp:
+        embedded = Path(temp) / "source.c"
+        copied = Path(temp) / "object.o"
+        subprocess.run(["objcopy", "--dump-section", f".source={embedded}", str(obj), str(copied)],
+                       check=True)
+        data = embedded.read_bytes()
+    if data != source.read_bytes():
+        raise RuntimeError("KV store object does not contain the requested source")
+    match = re.search(rb"\bvoid\s+main\s*\((.*?)\)\s*\{", data, re.DOTALL)
+    args = [b" ".join(arg.split()) for arg in match.group(1).split(b",")] if match else []
+    expected = [b"tensor key", b"tensor value", b"tensor locations", b"tensor metadata",
+                b"tensor key_pool", b"tensor value_pool"]
+    if args != expected:
+        raise RuntimeError("KV store ELF tensor arguments do not match its four-input/two-output glue")
 
 
 def main():
@@ -32,6 +54,8 @@ def main():
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
+        if name == "kv_store_bf16":
+            verify_kv_store_abi(out / f"{name}.o", root / f"csrc/tpc/{source}")
         subprocess.run(["objcopy", "-I", "binary", "-O", "elf64-x86-64", "-B", "i386:x86-64",
                         f"{name}.o", f"{name}_x86.o"], cwd=out, check=True)
         objects.append(f"{name}_x86.o")

@@ -2,6 +2,7 @@
 #include <tpc_kernel_lib_interface.h>
 
 #include <dlfcn.h>
+#include <cstring>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -33,8 +34,51 @@ int main(int argc, char** argv) {
         "gk_attn_tile_softmax_bf16_v1", "gk_attn_online_merge_f32_v1", "gk_attn_online_finalize_bf16_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
+
+    using Instantiate = GlueCodeReturn (*)(HabanaKernelParams*, HabanaKernelInstantiation*);
+    const auto instantiate = reinterpret_cast<Instantiate>(dlsym(library, "InstantiateTpcKernel"));
+    if (!instantiate) throw std::runtime_error("InstantiateTpcKernel is missing");
+    Tensor inputs[4]{}, outputs[2]{};
+    const auto shape = [](Tensor& tensor, TensorDataType type, uint64_t width, uint64_t rows) {
+      tensor.geometry.dataType = type;
+      tensor.geometry.dims = rows ? 2 : 1;
+      tensor.geometry.maxSizes[0] = tensor.geometry.minSizes[0] = width;
+      if (rows) tensor.geometry.maxSizes[1] = tensor.geometry.minSizes[1] = rows;
+    };
+    shape(inputs[2], DATA_I32, 8, 0);
+    shape(inputs[3], DATA_I32, 1, 0);
+    HabanaKernelParams params{};
+    std::strcpy(params.guid.name, "gk_kv_store_bf16_v1");
+    params.inputTensorNr = 4;
+    params.inputTensors = inputs;
+    params.outputTensorNr = 2;
+    params.outputTensors = outputs;
+    for (const uint64_t width : {17u, 64u, 128u, 129u, 512u, 1024u}) {
+      shape(inputs[0], DATA_BF16, width, 8);
+      shape(inputs[1], DATA_BF16, width, 8);
+      shape(outputs[0], DATA_BF16, width, 32);
+      shape(outputs[1], DATA_BF16, width, 32);
+      TensorAccessPattern in_patterns[4]{}, out_patterns[2]{};
+      HabanaKernelInstantiation instance{};
+      instance.inputTensorAccessPattern = in_patterns;
+      instance.outputTensorAccessPattern = out_patterns;
+      const auto status = instantiate(&params, &instance);
+      if (width % 128) {
+        if (status != GLUE_INCOMPATIBLE_INPUT_SIZE)
+          throw std::runtime_error("KV store accepted a non-aligned width");
+        continue;
+      }
+      if (status != GLUE_INSUFFICIENT_ELF_BUFFER || !instance.kernel.elfSize ||
+          instance.indexSpaceRank != 2 || instance.indexSpaceGeometry[0] != width / 128 ||
+          instance.indexSpaceGeometry[1] != 8)
+        throw std::runtime_error("KV store rejected an aligned width or mapped it incorrectly");
+      std::vector<uint8_t> elf(instance.kernel.elfSize);
+      instance.kernel.kernelElf = elf.data();
+      if (instantiate(&params, &instance) != GLUE_SUCCESS)
+        throw std::runtime_error("KV store ELF instantiation failed");
+    }
     dlclose(library);
-    std::cout << "generic provider exposes 15 expected GUIDs; old attention GUIDs absent\n";
+    std::cout << "generic provider GUIDs and KV store width contract passed\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

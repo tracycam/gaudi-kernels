@@ -118,13 +118,18 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t rows)
 }
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc > 2 || (argc == 2 && std::string(argv[1]) != "--smoke"))
+      throw std::invalid_argument("expected no arguments or --smoke");
     DeviceRuntime runtime({});
     HbmArena arena(runtime.device_id(), 128ULL * 1024 * 1024);
-    for (const auto width : {512u, 1024u})
-      for (const auto rows : {1u, 7u, 33u, 137u, 1025u}) run(runtime, arena, width, rows);
-    run(runtime, arena, 17, 7);
+    if (argc == 2) {
+      run(runtime, arena, 128, 3);
+    } else {
+      for (const auto width : {512u, 1024u})
+        for (const auto rows : {1u, 7u, 33u, 137u, 1025u}) run(runtime, arena, width, rows);
+    }
     std::cout << "KV valid_rows and untouched-slot gate passed\n";
     return 0;
   } catch (const std::exception& error) {

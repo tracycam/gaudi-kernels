@@ -157,7 +157,7 @@ GlueCodeReturn instantiate_kv_store(HabanaKernelParams* input, HabanaKernelInsta
       metadata.dataType != DATA_I32 || input->outputTensors[0].geometry.dataType != DATA_BF16 ||
       input->outputTensors[1].geometry.dataType != DATA_BF16)
     return GLUE_INCOMPATIBLE_DATA_TYPE;
-  if (key.dims != 2 || !key.maxSizes[0] || key.maxSizes[0] > INT_MAX ||
+  if (key.dims != 2 || !key.maxSizes[0] || key.maxSizes[0] > INT_MAX || key.maxSizes[0] % 128 ||
       !key.maxSizes[1] || key.maxSizes[1] > 4096 || key.minSizes[0] != key.maxSizes[0] ||
       key.minSizes[1] != key.maxSizes[1] || value.dims != 2 ||
       value.maxSizes[0] != key.maxSizes[0] || value.maxSizes[1] != key.maxSizes[1] ||
@@ -175,7 +175,7 @@ GlueCodeReturn instantiate_kv_store(HabanaKernelParams* input, HabanaKernelInsta
       return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
   }
   output->indexSpaceRank = 2;
-  output->indexSpaceGeometry[0] = (key.maxSizes[0] + 127) / 128;
+  output->indexSpaceGeometry[0] = key.maxSizes[0] / 128;
   output->indexSpaceGeometry[1] = key.maxSizes[1];
   for (unsigned i = 0; i < 2; ++i) {
     auto& access = output->inputTensorAccessPattern[i];
