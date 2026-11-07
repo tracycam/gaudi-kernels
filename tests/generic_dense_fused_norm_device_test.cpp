@@ -212,7 +212,7 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t rows,
             << " cpu_fp32_floor " << max_floor << " max_abs " << max_absolute
             << " unrounded_reference_differences " << unrounded_reference_differences << '\n';
   if (residual_mismatches || pure_mismatches || (width > 1 && rows > 1 && !unrounded_reference_differences) ||
-      max_error > std::max(3e-3, 2 * max_floor) || max_error > 1e-2)
+      max_error > std::max(3e-3, 2 * max_floor) || max_error > 3e-3)
     throw std::runtime_error("fused residual RMSNorm failed the numerical gate");
 }
 }  // namespace
@@ -223,7 +223,8 @@ int main() {
       throw std::runtime_error("FP64-to-BF16 midpoint check failed");
     DeviceRuntime runtime({});
     HbmArena arena(runtime.device_id(), 192ULL * 1024 * 1024);
-    for (const auto [width, rows] : {std::pair{1, 1}, {127, 7}, {129, 7}, {8192, 7},
+    for (const auto [width, rows] : {std::pair{1, 1}, {64, 65}, {127, 7}, {128, 7}, {129, 7},
+                                    {2048, 7}, {4096, 7}, {8192, 7},
                                     {7168, 1}, {7168, 7}, {7168, 33}, {7168, 137}, {7168, 1025}})
       run(runtime, arena, width, rows, 1e-6f);
     run(runtime, arena, 7168, 17, 1e-5f);

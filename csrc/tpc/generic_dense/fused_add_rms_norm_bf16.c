@@ -19,7 +19,7 @@ void main(tensor x, tensor residual, tensor gamma, tensor residual_out, tensor n
       v_bf16_st_tnsr_partial(pos, residual_out, rounded, (char)count, 0);
       ss = v_bf16_mac_acc32_b(rounded, rounded, ss);
     }
-    float64 sum = v_f32_reduce_add(ss.v1 + ss.v2);
+    float64 sum = norm_sum_squares(ss);
     float64 inverse = norm_refined_rsqrt(sum * (1.0f / (float)width) + epsilon);
     for (int k = 0; k < width; k += 128) {
       int5 pos = {k, row, 0, 0, 0}, g = {k, 0, 0, 0, 0};
