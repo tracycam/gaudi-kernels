@@ -49,6 +49,10 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
   if (std::strcmp(name, generic_attention::kMerge) == 0) return 17;
   if (std::strcmp(name, generic_attention::kFinalize) == 0) return 18;
+  if (std::strcmp(name, generic_attention::kHeadStore) == 0) return 19;
+  if (std::strcmp(name, generic_attention::kDecodeExp) == 0) return 20;
+  if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
+  if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
   return -1;
 }
 
@@ -420,7 +424,7 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 15 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 19 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -436,6 +440,10 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 12) std::strcpy(guids[12].name, generic_attention::kSoftmax);
   if (guids && *count && capacity > 13) std::strcpy(guids[13].name, generic_attention::kMerge);
   if (guids && *count && capacity > 14) std::strcpy(guids[14].name, generic_attention::kFinalize);
+  if (guids && *count && capacity > 15) std::strcpy(guids[15].name, generic_attention::kHeadStore);
+  if (guids && *count && capacity > 16) std::strcpy(guids[16].name, generic_attention::kDecodeExp);
+  if (guids && *count && capacity > 17) std::strcpy(guids[17].name, generic_attention::kDecodeNormalize);
+  if (guids && *count && capacity > 18) std::strcpy(guids[18].name, generic_attention::kDirectSoftmax);
   return GLUE_SUCCESS;
 }
 
@@ -453,6 +461,9 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 10) return instantiate_index_put_i64(input, output);
   if (id == 16) return generic_attention::instantiate_softmax(input, output);
   if (id == 17 || id == 18) return generic_attention::instantiate_online(input, output, id == 17);
+  if (id == 19) return generic_attention::instantiate_head_store(input, output);
+  if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
+  if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
