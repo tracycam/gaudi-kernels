@@ -60,12 +60,13 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
       !shape(input->outputTensors[1], DATA_F32, {rows, heads}) ||
       !shape(input->outputTensors[2], DATA_F32, {rows, heads}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  output->indexSpaceRank = 2;
+  output->indexSpaceRank = 3;
   output->indexSpaceGeometry[0] = heads;
   output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[2] = 1;
   for (unsigned i : {0u, 1u}) {
     auto& access = i ? output->outputTensorAccessPattern[0] : output->inputTensorAccessPattern[0];
-    mapped(access, 0, 0, keys - 1, 0);
+    mapped(access, 0, 2, keys - 1, 0);
     mapped(access, 1, 1, 0, 1);
     mapped(access, 2, 0, 0, 1);
   }
@@ -104,14 +105,15 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
         !shape(input->outputTensors[0], DATA_BF16, {width, rows, heads}))
       return GLUE_INCOMPATIBLE_INPUT_SIZE;
   }
-  output->indexSpaceRank = 2;
+  output->indexSpaceRank = 3;
   output->indexSpaceGeometry[0] = heads;
   output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[2] = 1;
   for (unsigned i = 0; i < input->inputTensorNr; ++i) {
     auto& access = output->inputTensorAccessPattern[i];
     const bool is_data = merge ? (i == 2 || i == 5) : i == 1;
     if (is_data) {
-      mapped(access, 0, 0, width - 1, 0);
+      mapped(access, 0, 2, width - 1, 0);
       mapped(access, 1, 1, 0, 1);
       mapped(access, 2, 0, 0, 1);
     } else {
@@ -123,7 +125,7 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
     auto& access = output->outputTensorAccessPattern[i];
     const bool is_data = merge ? i == 2 : true;
     if (is_data) {
-      mapped(access, 0, 0, width - 1, 0);
+      mapped(access, 0, 2, width - 1, 0);
       mapped(access, 1, 1, 0, 1);
       mapped(access, 2, 0, 0, 1);
     } else {

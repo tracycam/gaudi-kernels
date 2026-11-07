@@ -77,12 +77,13 @@ GlueCodeReturn instantiate_norm(HabanaKernelParams* input, HabanaKernelInstantia
         (rank == 2 && tensor.minSizes[1] != tensor.maxSizes[1]))
       return i < inputs ? GLUE_INCOMPATIBLE_INPUT_SIZE : GLUE_INCOMPATIBLE_OUTPUT_SIZE;
   }
-  output->indexSpaceRank = 1;
+  output->indexSpaceRank = 2;
   output->indexSpaceGeometry[0] = shape.maxSizes[1];
+  output->indexSpaceGeometry[1] = 1;
   for (unsigned i = 0; i < inputs + outputs; ++i) {
     auto& access = i < inputs ? output->inputTensorAccessPattern[i] : output->outputTensorAccessPattern[i - inputs];
     access.allRequired = 0;
-    access.mapping[0].indexSpaceDim = 0;
+    access.mapping[0].indexSpaceDim = 1;
     access.mapping[0].a = 0;
     access.mapping[0].start_b = 0;
     access.mapping[0].end_b = shape.maxSizes[0] - 1;
@@ -498,8 +499,8 @@ extern "C" GlueCodeReturn GetShapeInference(DeviceId, const ShapeInferenceParams
              ? GLUE_SUCCESS : GLUE_NODE_NOT_FOUND;
 }
 
-extern "C" GlueCodeReturn GetSupportedDataLayout(const HabanaKernelParams* input,
-                                                  NodeDataLayouts* layouts, uint32_t* count) {
+extern "C" GlueCodeReturn GetSupportedDataLayouts(const HabanaKernelParams* input,
+                                                   NodeDataLayouts* layouts, uint32_t* count) {
   if (kind(input->guid.name) < 0) return GLUE_NODE_NOT_FOUND;
   const auto capacity = *count;
   *count = 1;
