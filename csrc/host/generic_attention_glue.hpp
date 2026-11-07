@@ -52,23 +52,22 @@ inline GlueCodeReturn binary(HabanaKernelInstantiation* output, unsigned char* s
 }
 
 inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
-  if (input->inputTensorNr != 6) return GLUE_INCOMPATIBLE_INPUT_COUNT;
-  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->inputTensorNr != 5) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& source = input->inputTensors[0].geometry;
   const auto& pool = input->outputTensors[0].geometry;
   const unsigned long width = source.maxSizes[0], rows = source.maxSizes[1];
-  const unsigned long d = pool.maxSizes[0], slots = pool.maxSizes[1], heads = pool.maxSizes[2];
-  if ((d != 64 && d != 128) || !heads || d * heads != width || width % 128 ||
-      !rows || rows > 4096 || !slots || slots > INT_MAX ||
+  const unsigned long d = pool.maxSizes[0], capacity = pool.maxSizes[1];
+  if ((d != 64 && d != 128) || width % d) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  const unsigned long heads = width / d;
+  if (!heads || width % 128 || !rows || rows > 4096 || !capacity || capacity > INT_MAX ||
       !shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
       !shape(input->inputTensors[1], DATA_BF16, {width, rows}) ||
       !shape(input->inputTensors[2], DATA_I32, {rows}) ||
-      !shape(input->inputTensors[3], DATA_I32, {1}) ||
-      !shape(input->inputTensors[4], DATA_BF16, {d, slots, heads}) ||
-      !shape(input->inputTensors[5], DATA_BF16, {d, slots, heads}) ||
-      !shape(input->outputTensors[0], DATA_BF16, {d, slots, heads}) ||
-      !shape(input->outputTensors[1], DATA_BF16, {d, slots, heads}))
+      !shape(input->inputTensors[3], DATA_I32, {3}) ||
+      !shape(input->inputTensors[4], DATA_BF16, {d, capacity}) ||
+      !shape(input->outputTensors[0], DATA_BF16, {d, capacity}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   output->indexSpaceRank = 4;
   output->indexSpaceGeometry[0] = heads;
@@ -81,20 +80,17 @@ inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKe
     mapped(access, 1, 1, 0, 1);
   }
   mapped(output->inputTensorAccessPattern[2], 0, 1, 0, 1);
-  mapped(output->inputTensorAccessPattern[3], 0, 2, 0, 0);
-  for (unsigned i : {0u, 1u}) {
-    for (auto* access : {&output->inputTensorAccessPattern[i + 4], &output->outputTensorAccessPattern[i]}) {
-      mapped(*access, 0, 2, d - 1, 0);
-      mapped(*access, 1, 3, slots - 1, 0);
-      mapped(*access, 2, 0, 0, 1);
-    }
-    // The store writes only selected slots. Without mandatory reuse the SRAM
-    // slicer may write an otherwise uninitialized whole pool back to HBM.
-    auto& out = output->outputTensorAccessPattern[i];
-    out.inputsReusability = 1u << (4 + i);
-    out.inputReusabilityBinding = 1;
-    out.sparseAccess = 1;
+  mapped(output->inputTensorAccessPattern[3], 0, 2, 2, 0);
+  for (auto* access : {&output->inputTensorAccessPattern[4], &output->outputTensorAccessPattern[0]}) {
+    mapped(*access, 0, 2, d - 1, 0);
+    mapped(*access, 1, 3, capacity - 1, 0);
   }
+  // Only selected slots are written. Mandatory reuse prevents an SRAM slice
+  // from being copied back over the rest of the persistent pool.
+  auto& out = output->outputTensorAccessPattern[0];
+  out.inputsReusability = 1u << 4;
+  out.inputReusabilityBinding = 1;
+  out.sparseAccess = 1;
   output->kernel.paramsNr = 0;
   return d == 128 ? binary(output, &_binary_kv_store_head_major_bf16_o_start,
                            &_binary_kv_store_head_major_bf16_o_end)

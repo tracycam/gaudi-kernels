@@ -25,7 +25,7 @@ def verify_kv_store_abi(obj, source):
     expected = [b"tensor key", b"tensor value", b"tensor locations", b"tensor metadata",
                 b"tensor key_pool", b"tensor value_pool"]
     if source.name in ("kv_store_head_major_bf16.c", "kv_store_head_major64_bf16.c"):
-        expected[4:4] = [b"tensor old_key_pool", b"tensor old_value_pool"]
+        expected[4:] = [b"tensor old_pool", b"tensor pool"]
     if args != expected:
         raise RuntimeError("KV store ELF tensor arguments do not match its Glue contract")
 

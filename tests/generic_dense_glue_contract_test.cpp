@@ -86,15 +86,21 @@ static void check_kernel(pfnInstantiateTpcKernel instantiate, pfnGetSupportedDat
   if (sparse_pool_reuse) {
     if (instance.kernel.paramsNr != 0)
       throw std::runtime_error("sparse KV store has unexpected scalar parameters");
-    for (unsigned i = 0; i < 2; ++i) {
-      const auto& access = out_patterns.at(i);
-      if (!access.sparseAccess || !access.inputReusabilityBinding ||
-          access.inputsReusability != (1u << (4 + i)))
-        throw std::runtime_error("sparse KV output does not require reuse of its pool input");
-    }
+    const auto& access = out_patterns.at(0);
+    if (out_patterns.size() != 1 || !access.sparseAccess || !access.inputReusabilityBinding ||
+        access.inputsReusability != (1u << 4))
+      throw std::runtime_error("sparse KV output does not require reuse of its pool input");
     params.inputTensorNr = 4;
     if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_COUNT)
       throw std::runtime_error("sparse KV store accepted the wrong tensor ABI");
+    params.inputTensorNr = 5;
+    params.outputTensorNr = 2;
+    if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_OUTPUT_COUNT)
+      throw std::runtime_error("sparse KV store accepted the wrong output ABI");
+    params.outputTensorNr = 1;
+    inputs[3] = tensor(DATA_I32, {1});
+    if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_SIZE)
+      throw std::runtime_error("sparse KV store accepted incomplete metadata");
   }
 }
 
@@ -130,15 +136,15 @@ int main(int argc, char** argv) {
     check_kernel(instantiate, layouts, "gk_attn_direct_softmax_bf16_v1",
                  {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})}, {probabilities}, &scale);
     const auto source_kv = tensor(DATA_BF16, {1024, 4});
-    const auto head_major_pool = tensor(DATA_BF16, {128, 32768, 8});
+    const auto head_major_pool = tensor(DATA_BF16, {128, 2 * 131072 * 8});
     check_kernel(instantiate, layouts, "gk_kv_store_head_major_bf16_v1",
-                 {source_kv, source_kv, tensor(DATA_I32, {4}), tensor(DATA_I32, {1}),
-                  head_major_pool, head_major_pool}, {head_major_pool, head_major_pool}, nullptr, true);
+                 {source_kv, source_kv, tensor(DATA_I32, {4}), tensor(DATA_I32, {3}), head_major_pool},
+                 {head_major_pool}, nullptr, true);
     const auto source_kv64 = tensor(DATA_BF16, {128, 4});
-    const auto head_major_pool64 = tensor(DATA_BF16, {64, 32768, 2});
+    const auto head_major_pool64 = tensor(DATA_BF16, {64, 2 * 131072 * 2});
     check_kernel(instantiate, layouts, "gk_kv_store_head_major_bf16_v1",
-                 {source_kv64, source_kv64, tensor(DATA_I32, {4}), tensor(DATA_I32, {1}),
-                  head_major_pool64, head_major_pool64}, {head_major_pool64, head_major_pool64}, nullptr, true);
+                 {source_kv64, source_kv64, tensor(DATA_I32, {4}), tensor(DATA_I32, {3}), head_major_pool64},
+                 {head_major_pool64}, nullptr, true);
     const auto decode_scores = tensor(DATA_F32, {1024, 1, 56});
     const auto decode_stats = tensor(DATA_F32, {64, 56});
     const auto decode_probs = tensor(DATA_BF16, {1024, 1, 56});
