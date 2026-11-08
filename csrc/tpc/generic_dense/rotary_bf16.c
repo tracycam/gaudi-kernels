@@ -12,13 +12,14 @@ static inline void rotate_head(tensor input, tensor output, tensor cache, int ro
       int5 second = {base + rotary_half + offset, row, 0, 0, 0};
       int5 cosine = {offset, position, 0, 0, 0};
       int5 sine = {rotary_half + offset, position, 0, 0, 0};
-      const bfloat128 a = v_bf16_ld_tnsr_partial_b(first, input, (char)count, 0);
-      const bfloat128 b = v_bf16_ld_tnsr_partial_b(second, input, (char)count, 0);
-      const bfloat128 c = v_bf16_ld_tnsr_partial_b(cosine, cache, (char)count, 0);
-      const bfloat128 s = v_bf16_ld_tnsr_partial_b(sine, cache, (char)count, 0);
-      const bfloat128 ac = a * c, bs = b * s, bc = b * c, as = a * s;
-      v_bf16_st_tnsr_partial(first, output, ac - bs, (char)count, 0);
-      v_bf16_st_tnsr_partial(second, output, bc + as, (char)count, 0);
+      const float128 a = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(first, input, (char)count, 0));
+      const float128 b = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(second, input, (char)count, 0));
+      const float128 c = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(cosine, cache, (char)count, 0));
+      const float128 s = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(sine, cache, (char)count, 0));
+      const float128 first_value = {a.v1 * c.v1 - b.v1 * s.v1, a.v2 * c.v2 - b.v2 * s.v2};
+      const float128 second_value = {b.v1 * c.v1 + a.v1 * s.v1, b.v2 * c.v2 + a.v2 * s.v2};
+      v_bf16_st_tnsr_partial(first, output, convert_float128_to_bfloat128(first_value, SW_RHNE), (char)count, 0);
+      v_bf16_st_tnsr_partial(second, output, convert_float128_to_bfloat128(second_value, SW_RHNE), (char)count, 0);
     }
   } else {
     for (int offset = 0; offset < rotary_half; ++offset) {
@@ -26,12 +27,11 @@ static inline void rotate_head(tensor input, tensor output, tensor cache, int ro
       int5 second = {base + 2 * offset + 1, row, 0, 0, 0};
       int5 cosine = {offset, position, 0, 0, 0};
       int5 sine = {rotary_half + offset, position, 0, 0, 0};
-      const bf16 a = s_bf16_ld_g(gen_addr(first, input));
-      const bf16 b = s_bf16_ld_g(gen_addr(second, input));
-      const bf16 c = s_bf16_ld_g(gen_addr(cosine, cache));
-      const bf16 s = s_bf16_ld_g(gen_addr(sine, cache));
-      const bf16 ac = a * c, bs = b * s, bc = b * c, as = a * s;
-      const bf16 out_first = ac - bs, out_second = bc + as;
+      const float a = s_bf16_ld_g(gen_addr(first, input));
+      const float b = s_bf16_ld_g(gen_addr(second, input));
+      const float c = s_bf16_ld_g(gen_addr(cosine, cache));
+      const float s = s_bf16_ld_g(gen_addr(sine, cache));
+      const bf16 out_first = a * c - b * s, out_second = b * c + a * s;
       v_bf16_st_tnsr_partial(first, output, (bfloat128)out_first, 0, 0);
       v_bf16_st_tnsr_partial(second, output, (bfloat128)out_second, 0, 0);
     }

@@ -147,14 +147,9 @@ void run(DeviceRuntime& runtime, HbmArena& arena, int q_heads, int k_heads, int 
             const double b = widen(source[static_cast<size_t>(row) * width + head_base + b_index]);
             const double c = widen(cache[static_cast<size_t>(positions[row]) * rotary_dim + pair]);
             const double s = widen(cache[static_cast<size_t>(positions[row]) * rotary_dim + half + pair]);
-            const double ac = widen(bf16_direct(a * c)), bs = widen(bf16_direct(b * s));
-            const double bc = widen(bf16_direct(b * c)), as = widen(bf16_direct(a * s));
-            truth = widen(bf16_direct(first ? ac - bs : bc + as));
-            const float fac = widen(bf16(static_cast<float>(a) * static_cast<float>(c)));
-            const float fbs = widen(bf16(static_cast<float>(b) * static_cast<float>(s)));
-            const float fbc = widen(bf16(static_cast<float>(b) * static_cast<float>(c)));
-            const float fas = widen(bf16(static_cast<float>(a) * static_cast<float>(s)));
-            baseline = widen(bf16(first ? fac - fbs : fbc + fas));
+            truth = widen(bf16_direct(first ? a * c - b * s : b * c + a * s));
+            const float fa = a, fb = b, fc = c, fs = s;
+            baseline = widen(bf16(first ? fa * fc - fb * fs : fb * fc + fa * fs));
           }
           const double value = widen(actual[offset]);
           if (!std::isfinite(value) || !std::isfinite(truth) || !std::isfinite(baseline))

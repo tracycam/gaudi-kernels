@@ -107,8 +107,8 @@ void run(DeviceRuntime& runtime, HbmArena& arena, uint32_t width, uint32_t rows)
       const double wide_gate = gate;
       const float silu32 = gate / (1.f + std::exp(-gate));
       const double silu64 = wide_gate / (1.0 + std::exp(-wide_gate));
-      const double truth = widen(bf16_direct(static_cast<double>(widen(bf16_direct(silu64))) * up));
-      const double reference32 = widen(bf16(widen(bf16(silu32)) * up));
+      const double truth = widen(bf16_direct(silu64 * up));
+      const double reference32 = widen(bf16(silu32 * up));
       const double result = widen(actual[i]);
       if (!std::isfinite(truth) || !std::isfinite(reference32) || !std::isfinite(result))
         throw std::runtime_error("nonfinite SiLU result");
