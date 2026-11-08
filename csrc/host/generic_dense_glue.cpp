@@ -16,6 +16,8 @@ extern "C" unsigned char _binary_kv_store_bf16_o_start, _binary_kv_store_bf16_o_
 extern "C" unsigned char _binary_rotary_bf16_o_start, _binary_rotary_bf16_o_end;
 extern "C" unsigned char _binary_paged_metadata_i32_o_start, _binary_paged_metadata_i32_o_end;
 extern "C" unsigned char _binary_token_indices_i32_o_start, _binary_token_indices_i32_o_end;
+extern "C" unsigned char _binary_paged_alloc_i32_o_start, _binary_paged_alloc_i32_o_end;
+extern "C" unsigned char _binary_paged_free_i32_o_start, _binary_paged_free_i32_o_end;
 extern "C" unsigned char _binary_cast_f32_to_bf16_o_start, _binary_cast_f32_to_bf16_o_end;
 extern "C" unsigned char _binary_index_put_i64_o_start, _binary_index_put_i64_o_end;
 
@@ -32,6 +34,8 @@ constexpr const char* kSchedulerMetadata = "gk_scheduler_metadata_i32_v1";
 constexpr const char* kSchedulerTokens = "gk_scheduler_tokens_i32_v1";
 constexpr const char* kCastF32ToBf16 = "gk_cast_f32_to_bf16_v1";
 constexpr const char* kIndexPutI64 = "gk_index_put_i64_v1";
+constexpr const char* kPagedAlloc = "gk_paged_alloc_i32_v1";
+constexpr const char* kPagedFree = "gk_paged_free_i32_v1";
 int kind(const char* name) {
   if (!name) return -1;
   if (std::strcmp(name, kAdd) == 0) return 0;
@@ -44,6 +48,8 @@ int kind(const char* name) {
   if (std::strcmp(name, kTokenIndices) == 0) return 8;
   if (std::strcmp(name, kCastF32ToBf16) == 0) return 9;
   if (std::strcmp(name, kIndexPutI64) == 0) return 10;
+  if (std::strcmp(name, kPagedAlloc) == 0) return 25;
+  if (std::strcmp(name, kPagedFree) == 0) return 26;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
@@ -422,11 +428,61 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
   std::memcpy(output->kernel.kernelElf, &_binary_index_put_i64_o_start, size);
   return GLUE_SUCCESS;
 }
+
+GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                       bool release) {
+  const unsigned inputs = release ? 2 : 3, outputs = release ? 2 : 1;
+  if (input->inputTensorNr != inputs) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != outputs) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  int32_t page_size = 0;
+  if (input->nodeParams.nodeParamsSize != sizeof(page_size) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&page_size, input->nodeParams.nodeParams, sizeof(page_size));
+  if (page_size != 16 && page_size != 64) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  for (unsigned i = 0; i < inputs + outputs; ++i) {
+    const auto& tensor = i < inputs ? input->inputTensors[i].geometry : input->outputTensors[i - inputs].geometry;
+    if (tensor.dataType != DATA_I32) return GLUE_INCOMPATIBLE_DATA_TYPE;
+    for (unsigned dim = 0; dim < tensor.dims; ++dim)
+      if (!tensor.maxSizes[dim] || tensor.minSizes[dim] != tensor.maxSizes[dim])
+        return i < inputs ? GLUE_INCOMPATIBLE_INPUT_SIZE : GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  }
+  const auto& slots = input->inputTensors[0].geometry;
+  const auto& result = input->outputTensors[0].geometry;
+  if (slots.dims != 2 || slots.maxSizes[0] != 2 || result.dims != 2 || result.maxSizes[0] != 2)
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (release) {
+    const auto& metadata = input->inputTensors[1].geometry;
+    const auto& count = input->outputTensors[1].geometry;
+    if (slots.maxSizes[1] > 131072 || result.maxSizes[1] != slots.maxSizes[1] ||
+        metadata.dims != 1 || metadata.maxSizes[0] != 2 || count.dims != 1 || count.maxSizes[0] != 1)
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  } else {
+    const auto& pages = input->inputTensors[1].geometry;
+    const auto& metadata = input->inputTensors[2].geometry;
+    if (slots.maxSizes[1] > 256 || pages.dims != 2 || pages.maxSizes[0] != 2 ||
+        pages.maxSizes[1] != 512 || metadata.dims != 2 || metadata.maxSizes[0] != 4 ||
+        metadata.maxSizes[1] != slots.maxSizes[1] || result.maxSizes[1] > 4096)
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = release ? 1 : slots.maxSizes[1];
+  for (unsigned i = 0; i < inputs; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+  for (unsigned i = 0; i < outputs; ++i) output->outputTensorAccessPattern[i].allRequired = 1;
+  output->kernel.paramsNr = 1;
+  std::memcpy(output->kernel.scalarParams, &page_size, sizeof(page_size));
+  auto* start = release ? &_binary_paged_free_i32_o_start : &_binary_paged_alloc_i32_o_start;
+  auto* end = release ? &_binary_paged_free_i32_o_end : &_binary_paged_alloc_i32_o_end;
+  const unsigned size = static_cast<unsigned>(end - start), capacity = output->kernel.elfSize;
+  output->kernel.elfSize = size;
+  if (capacity < size) return GLUE_INSUFFICIENT_ELF_BUFFER;
+  std::memcpy(output->kernel.kernelElf, start, size);
+  return GLUE_SUCCESS;
+}
 }
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 21 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 23 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -453,6 +509,8 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
     guids[19].supportsDynamicShapes = 1;
   }
   if (guids && *count && capacity > 20) std::strcpy(guids[20].name, generic_attention::kPack);
+  if (guids && *count && capacity > 21) std::strcpy(guids[21].name, kPagedAlloc);
+  if (guids && *count && capacity > 22) std::strcpy(guids[22].name, kPagedFree);
   return GLUE_SUCCESS;
 }
 
@@ -475,6 +533,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
   if (id == 24) return generic_attention::instantiate_pack(input, output);
+  if (id == 25 || id == 26) return instantiate_paged_slots(input, output, id == 26);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;

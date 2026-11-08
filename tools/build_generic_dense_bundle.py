@@ -49,6 +49,8 @@ def main():
                          ("kv_store_head_major64_bf16", "generic_dense/kv_store_head_major64_bf16.c"),
                          ("rotary_bf16", "generic_dense/rotary_bf16.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
+                         ("paged_alloc_i32", "generic_dense/paged_alloc_i32.c"),
+                         ("paged_free_i32", "generic_dense/paged_free_i32.c"),
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
                          ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c"),
                          ("attn_tile_softmax_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
