@@ -53,6 +53,7 @@ def main():
                          ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c"),
                          ("attn_tile_softmax_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
                          ("attn_direct_softmax_bf16", "generic_dense/attn_direct_softmax_bf16.c"),
+                         ("attn_tile_indices_i32", "generic_dense/attn_tile_indices_i32.c"),
                          ("attn_decode_exp_f32", "generic_dense/attn_decode_exp_f32.c"),
                          ("attn_decode_normalize_bf16", "generic_dense/attn_decode_normalize_bf16.c"),
                          ("attn_online_merge_f32", "generic_dense/attn_online_merge_f32.c"),

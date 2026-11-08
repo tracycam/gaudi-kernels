@@ -53,6 +53,7 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kDecodeExp) == 0) return 20;
   if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
   if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
+  if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
   return -1;
 }
 
@@ -424,7 +425,7 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 19 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 20 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -444,6 +445,12 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 16) std::strcpy(guids[16].name, generic_attention::kDecodeExp);
   if (guids && *count && capacity > 17) std::strcpy(guids[17].name, generic_attention::kDecodeNormalize);
   if (guids && *count && capacity > 18) std::strcpy(guids[18].name, generic_attention::kDirectSoftmax);
+  if (guids && *count && capacity > 19) {
+    std::strcpy(guids[19].name, generic_attention::kTileIndices);
+    guids[19].nameHash.Value = 0x005d2ca4a663d7b1ULL;
+    guids[19].kernelProperties = 0;
+    guids[19].supportsDynamicShapes = 1;
+  }
   return GLUE_SUCCESS;
 }
 
@@ -464,6 +471,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 19) return generic_attention::instantiate_head_store(input, output);
   if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
+  if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
@@ -505,9 +513,20 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
 }
 
 extern "C" GlueCodeReturn GetShapeInference(DeviceId, const ShapeInferenceParams* input,
-                                              ShapeInferenceOutput*) {
-  return kind(input->pGuid ? input->pGuid->name : input->guid.name) >= 0
-             ? GLUE_SUCCESS : GLUE_NODE_NOT_FOUND;
+                                              ShapeInferenceOutput* output) {
+  const int id = kind(input->pGuid ? input->pGuid->name : input->guid.name);
+  if (id < 0) return GLUE_NODE_NOT_FOUND;
+  if (id == 23) {
+    if (!output || input->inputTensorsNr != 4 || input->outputTensorsNr != 1 ||
+        !input->inputTensors || !input->inputTensors[2] || !output->outputTensors ||
+        !output->outputTensors[0]) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+    auto& shape = output->outputTensors[0]->geometry;
+    shape.dims = 2;
+    shape.maxSizes[0] = shape.minSizes[0] = 64;
+    shape.maxSizes[1] = input->inputTensors[2]->geometry.maxSizes[1];
+    shape.minSizes[1] = input->inputTensors[2]->geometry.minSizes[1];
+  }
+  return GLUE_SUCCESS;
 }
 
 extern "C" GlueCodeReturn GetSupportedDataLayouts(const HabanaKernelParams* input,

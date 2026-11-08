@@ -25,7 +25,11 @@ int main(int argc, char** argv) {
     if (get(DEVICE_ID_GAUDI2, &count, guids.data()) != GLUE_SUCCESS)
       throw std::runtime_error("provider enumeration failed");
     std::set<std::string> names;
-    for (const auto& guid : guids) names.emplace(guid.name);
+    for (const auto& guid : guids) {
+      names.emplace(guid.name);
+      if (std::strcmp(guid.name, "gk_attn_tile_indices_i32_v1") == 0 && !guid.supportsDynamicShapes)
+        throw std::runtime_error("tile-index kernel did not advertise dynamic input shapes");
+    }
     const std::set<std::string> expected{
         "gk_add_bf16_v1", "gk_fused_add_rms_norm_bf16_v1", "gk_rms_norm_bf16_v1",
         "gk_silu_and_mul_bf16_v1", "gk_kv_store_bf16_v1", "gk_rotary_bf16_v1",
@@ -33,7 +37,8 @@ int main(int argc, char** argv) {
         "gk_index_put_i64_v1", "gk_scheduler_metadata_i32_v1", "gk_scheduler_tokens_i32_v1",
         "gk_attn_tile_softmax_bf16_v1", "gk_attn_online_merge_f32_v1", "gk_attn_online_finalize_bf16_v1",
         "gk_kv_store_head_major_bf16_v1", "gk_attn_decode_exp_f32_v1",
-        "gk_attn_decode_normalize_bf16_v1", "gk_attn_direct_softmax_bf16_v1"};
+        "gk_attn_decode_normalize_bf16_v1", "gk_attn_direct_softmax_bf16_v1",
+        "gk_attn_tile_indices_i32_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
 

@@ -15,6 +15,7 @@ extern "C" unsigned char _binary_kv_store_head_major64_bf16_o_start, _binary_kv_
 extern "C" unsigned char _binary_attn_decode_exp_f32_o_start, _binary_attn_decode_exp_f32_o_end;
 extern "C" unsigned char _binary_attn_decode_normalize_bf16_o_start, _binary_attn_decode_normalize_bf16_o_end;
 extern "C" unsigned char _binary_attn_direct_softmax_bf16_o_start, _binary_attn_direct_softmax_bf16_o_end;
+extern "C" unsigned char _binary_attn_tile_indices_i32_o_start, _binary_attn_tile_indices_i32_o_end;
 
 namespace generic_attention {
 using namespace tpc_lib_api;
@@ -25,6 +26,7 @@ constexpr const char* kHeadStore = "gk_kv_store_head_major_bf16_v1";
 constexpr const char* kDecodeExp = "gk_attn_decode_exp_f32_v1";
 constexpr const char* kDecodeNormalize = "gk_attn_decode_normalize_bf16_v1";
 constexpr const char* kDirectSoftmax = "gk_attn_direct_softmax_bf16_v1";
+constexpr const char* kTileIndices = "gk_attn_tile_indices_i32_v1";
 
 inline bool shape(const Tensor& tensor, TensorDataType type, std::initializer_list<unsigned long> sizes) {
   const auto& g = tensor.geometry;
@@ -49,6 +51,35 @@ inline GlueCodeReturn binary(HabanaKernelInstantiation* output, unsigned char* s
   if (capacity < output->kernel.elfSize) return GLUE_INSUFFICIENT_ELF_BUFFER;
   std::memcpy(output->kernel.kernelElf, start, output->kernel.elfSize);
   return GLUE_SUCCESS;
+}
+
+inline GlueCodeReturn instantiate_tile_indices(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 4) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& mapping = input->inputTensors[0].geometry;
+  const auto& requests = input->inputTensors[1].geometry;
+  const auto& tasks = input->inputTensors[2].geometry;
+  const auto count = tasks.maxSizes[1];
+  if (mapping.dataType != DATA_I32 || mapping.dims != 1 || !mapping.maxSizes[0] ||
+      mapping.minSizes[0] != 1 || requests.dataType != DATA_I32 || requests.dims != 1 ||
+      !requests.maxSizes[0] || requests.minSizes[0] != requests.maxSizes[0] ||
+      !count || !shape(input->inputTensors[2], DATA_I32, {4, count}) ||
+      !shape(input->inputTensors[3], DATA_I32, {1}) ||
+      !shape(input->outputTensors[0], DATA_I32, {64, count}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  output->indexSpaceRank = 2;
+  output->indexSpaceGeometry[0] = count;
+  output->indexSpaceGeometry[1] = 1;
+  output->inputTensorAccessPattern[0].allRequired = 1;
+  output->inputTensorAccessPattern[1].allRequired = 1;
+  mapped(output->inputTensorAccessPattern[2], 0, 1, 3, 0);
+  mapped(output->inputTensorAccessPattern[2], 1, 0, 0, 1);
+  output->inputTensorAccessPattern[3].allRequired = 1;
+  mapped(output->outputTensorAccessPattern[0], 0, 1, 63, 0);
+  mapped(output->outputTensorAccessPattern[0], 1, 0, 0, 1);
+  output->kernel.paramsNr = 0;
+  return binary(output, &_binary_attn_tile_indices_i32_o_start, &_binary_attn_tile_indices_i32_o_end);
 }
 
 inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKernelInstantiation* output) {

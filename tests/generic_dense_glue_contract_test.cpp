@@ -153,6 +153,11 @@ int main(int argc, char** argv) {
                  {decode_scores, decode_stats}, &scale);
     check_kernel(instantiate, layouts, "gk_attn_decode_normalize_bf16_v1",
                  {decode_scores, decode_stats}, {decode_probs}, nullptr);
+    auto dynamic_map = tensor(DATA_I32, {131072});
+    dynamic_map.geometry.minSizes[0] = 1;
+    check_kernel(instantiate, layouts, "gk_attn_tile_indices_i32_v1",
+                 {dynamic_map, tensor(DATA_I32, {8}), tensor(DATA_I32, {4, 16}),
+                  tensor(DATA_I32, {1})}, {tensor(DATA_I32, {64, 16})}, nullptr);
     dlclose(library);
     std::cout << "generic norm and attention access axes and layouts passed\n";
     return 0;
