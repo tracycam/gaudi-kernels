@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-// The final divide is performed on device; an empty row returns zero.
 void main(tensor sums, tensor accumulator, tensor result) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
-  const int width = get_dim_size(accumulator, 0);
+  const int width = get_dim_size(accumulator, 0), rows = get_dim_size(accumulator, 1);
   for (int head = begin[0]; head < end[0]; ++head) {
-    for (int row = begin[1]; row < end[1]; ++row) {
-      int5 stat = {row, head, 0, 0, 0};
-      float sum = s_f32_ld_g(gen_addr(stat, sums));
-      float64 reciprocal = sum > 0.f ? v_reciprocal_f32((float64)sum) : 0.f;
-      for (int col = 0; col < width; col += 128) {
-        int5 p = {col, row, head, 0, 0};
-        int lo = s_i32_min(width - col, 64);
-        int hi = s_i32_max(0, s_i32_min(width - col - 64, 64));
-        float64 a = v_f32_ld_tnsr_partial_b(p, accumulator, (char)(lo - 1), 0);
-        p[0] += 64;
-        float64 b = hi ? v_f32_ld_tnsr_partial_b(p, accumulator, (char)(hi - 1), 0) : (float64)0.f;
-        float128 pair = {a * reciprocal, b * reciprocal};
-        p[0] -= 64;
-        int count = s_i32_min(width - col, 128) - 1;
-        v_bf16_st_tnsr_partial(p, result, convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE), (char)count, 0);
+    for (int block = begin[1]; block < end[1]; ++block) {
+      int5 stat = {block * 64,head,0,0,0};
+      float64 denominator = v_f32_ld_tnsr_b(stat, sums);
+      float64 safe = v_f32_sel_grt_f32_b(denominator, 0.f, denominator, 1.f);
+      float64 inverse = v_f32_sel_grt_f32_b(denominator, 0.f, v_reciprocal_f32(safe), 0.f);
+      int last = s_i32_min(rows - block * 64, 64);
+      for (int item = 0; item < last; ++item) {
+        float64 r = v_broadcast_element_f32(inverse, item);
+        int5 p = {0,block * 64 + item,head,0,0};
+        float64 a = v_f32_ld_tnsr_b(p, accumulator) * r, b = 0.f;
+        if (width == 128) { p[0] = 64; b = v_f32_ld_tnsr_b(p, accumulator) * r; p[0] = 0; }
+        float128 pair = {a,b};
+        bfloat128 output = convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE);
+        if (width == 128) v_bf16_st_tnsr(p, result, output);
+        else v_bf16_st_tnsr_partial(p, result, output, 63, 0);
       }
     }
   }

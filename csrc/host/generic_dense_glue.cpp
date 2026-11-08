@@ -54,6 +54,7 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
   if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
   if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
+  if (std::strcmp(name, generic_attention::kPack) == 0) return 24;
   return -1;
 }
 
@@ -425,7 +426,7 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 20 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 21 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -451,6 +452,7 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
     guids[19].kernelProperties = 0;
     guids[19].supportsDynamicShapes = 1;
   }
+  if (guids && *count && capacity > 20) std::strcpy(guids[20].name, generic_attention::kPack);
   return GLUE_SUCCESS;
 }
 
@@ -472,6 +474,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
+  if (id == 24) return generic_attention::instantiate_pack(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;

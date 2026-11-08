@@ -122,13 +122,16 @@ int main(int argc, char** argv) {
 
     const auto scores = tensor(DATA_F32, {128, 4, 4});
     const auto probabilities = tensor(DATA_BF16, {128, 4, 4});
-    const auto stats = tensor(DATA_F32, {4, 4});
+    const auto stats = tensor(DATA_F32, {64, 4});
+    const auto expanded_stats = tensor(DATA_F32, {64, 4, 4});
     const auto data = tensor(DATA_F32, {64, 4, 4});
     const auto data_bf16 = tensor(DATA_BF16, {64, 4, 4});
     float scale = 0.125f;
     check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
                  {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})},
-                 {probabilities, stats, stats}, &scale);
+                 {probabilities, expanded_stats, expanded_stats}, &scale);
+    check_kernel(instantiate, layouts, "gk_attn_pack_stats_f32_v1",
+                 {expanded_stats, expanded_stats}, {stats, stats}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_merge_f32_v1",
                  {stats, stats, data, stats, stats, data}, {stats, stats, data}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_finalize_bf16_v1",
