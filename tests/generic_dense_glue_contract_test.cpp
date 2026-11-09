@@ -137,6 +137,11 @@ int main(int argc, char** argv) {
                  {stats, stats, data, stats, stats, data}, {stats, stats, data}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_finalize_bf16_v1",
                  {stats, data}, {data_bf16}, nullptr);
+    for (const auto dim : {64u, 128u})
+      for (const auto heads : {4u, 32u, 56u, 256u})
+        check_kernel(instantiate, layouts, "gk_attn_decode_reduce_bf16_v1",
+                     {tensor(DATA_F32, {64, 16, heads}), tensor(DATA_F32, {64, 16, heads}),
+                      tensor(DATA_F32, {dim, 16, heads})}, {tensor(DATA_BF16, {dim, heads, 1})}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_direct_softmax_bf16_v1",
                  {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})}, {probabilities}, &scale);
     const auto source_kv = tensor(DATA_BF16, {1024, 4});
@@ -149,32 +154,19 @@ int main(int argc, char** argv) {
     check_kernel(instantiate, layouts, "gk_kv_store_head_major_bf16_v1",
                  {source_kv64, source_kv64, tensor(DATA_I32, {4}), tensor(DATA_I32, {3}), head_major_pool64},
                  {head_major_pool64}, nullptr, true);
-    for (const auto [keys, heads] : {std::pair{1024u, 56u}, std::pair{8192u, 4u},
-                                      std::pair{8192u, 32u}, std::pair{8192u, 256u}}) {
-      const auto decode_scores = tensor(DATA_F32, {keys, 1, heads});
-      const auto decode_stats = tensor(DATA_F32, {64, heads});
-      const auto decode_probs = tensor(DATA_BF16, {keys, 1, heads});
-      check_kernel(instantiate, layouts, "gk_attn_decode_exp_f32_v1",
-                   {decode_scores, tensor(DATA_I32, {1}), tensor(DATA_I32, {3})},
-                   {decode_scores, decode_stats}, &scale);
-      check_kernel(instantiate, layouts, "gk_attn_decode_normalize_bf16_v1",
-                   {decode_scores, decode_stats}, {decode_probs}, nullptr);
-    }
     {
-      std::vector<Tensor> inputs{tensor(DATA_F32, {8320, 1, 4}), tensor(DATA_I32, {1}),
-                                 tensor(DATA_I32, {3})};
-      std::vector<Tensor> outputs{tensor(DATA_F32, {8320, 1, 4}), tensor(DATA_F32, {64, 4})};
+      std::vector<Tensor> inputs{tensor(DATA_F32, {64, 17, 4}), tensor(DATA_F32, {64, 17, 4}),
+                                 tensor(DATA_F32, {128, 17, 4})};
+      std::vector<Tensor> outputs{tensor(DATA_BF16, {128, 4, 1})};
       HabanaKernelParams params{};
-      std::strcpy(params.guid.name, "gk_attn_decode_exp_f32_v1");
+      std::strcpy(params.guid.name, "gk_attn_decode_reduce_bf16_v1");
       params.inputTensorNr = inputs.size();
       params.outputTensorNr = outputs.size();
       params.inputTensors = inputs.data();
       params.outputTensors = outputs.data();
-      params.nodeParams.nodeParams = &scale;
-      params.nodeParams.nodeParamsSize = sizeof(scale);
       HabanaKernelInstantiation instance{};
       if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_SIZE)
-        throw std::runtime_error("decode accepted a KV tile beyond 8192");
+        throw std::runtime_error("decode reduction accepted more than 16 tiles");
     }
     auto dynamic_map = tensor(DATA_I32, {131072});
     dynamic_map.geometry.minSizes[0] = 1;

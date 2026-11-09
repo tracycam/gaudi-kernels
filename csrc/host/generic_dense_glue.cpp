@@ -56,11 +56,10 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kMerge) == 0) return 17;
   if (std::strcmp(name, generic_attention::kFinalize) == 0) return 18;
   if (std::strcmp(name, generic_attention::kHeadStore) == 0) return 19;
-  if (std::strcmp(name, generic_attention::kDecodeExp) == 0) return 20;
-  if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
   if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
   if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
   if (std::strcmp(name, generic_attention::kPack) == 0) return 24;
+  if (std::strcmp(name, generic_attention::kDecodeReduce) == 0) return 27;
   return -1;
 }
 
@@ -482,7 +481,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 23 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 22 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -504,18 +503,17 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 13) std::strcpy(guids[13].name, generic_attention::kMerge);
   if (guids && *count && capacity > 14) std::strcpy(guids[14].name, generic_attention::kFinalize);
   if (guids && *count && capacity > 15) std::strcpy(guids[15].name, generic_attention::kHeadStore);
-  if (guids && *count && capacity > 16) std::strcpy(guids[16].name, generic_attention::kDecodeExp);
-  if (guids && *count && capacity > 17) std::strcpy(guids[17].name, generic_attention::kDecodeNormalize);
-  if (guids && *count && capacity > 18) std::strcpy(guids[18].name, generic_attention::kDirectSoftmax);
-  if (guids && *count && capacity > 19) {
-    std::strcpy(guids[19].name, generic_attention::kTileIndices);
-    guids[19].nameHash.Value = 0x005d2ca4a663d7b1ULL;
-    guids[19].kernelProperties = 0;
-    guids[19].supportsDynamicShapes = 1;
+  if (guids && *count && capacity > 16) std::strcpy(guids[16].name, generic_attention::kDirectSoftmax);
+  if (guids && *count && capacity > 17) {
+    std::strcpy(guids[17].name, generic_attention::kTileIndices);
+    guids[17].nameHash.Value = 0x005d2ca4a663d7b1ULL;
+    guids[17].kernelProperties = 0;
+    guids[17].supportsDynamicShapes = 1;
   }
-  if (guids && *count && capacity > 20) std::strcpy(guids[20].name, generic_attention::kPack);
-  if (guids && *count && capacity > 21) std::strcpy(guids[21].name, kPagedAlloc);
-  if (guids && *count && capacity > 22) std::strcpy(guids[22].name, kPagedFree);
+  if (guids && *count && capacity > 18) std::strcpy(guids[18].name, generic_attention::kPack);
+  if (guids && *count && capacity > 19) std::strcpy(guids[19].name, kPagedAlloc);
+  if (guids && *count && capacity > 20) std::strcpy(guids[20].name, kPagedFree);
+  if (guids && *count && capacity > 21) std::strcpy(guids[21].name, generic_attention::kDecodeReduce);
   return GLUE_SUCCESS;
 }
 
@@ -534,11 +532,11 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 16) return generic_attention::instantiate_softmax(input, output);
   if (id == 17 || id == 18) return generic_attention::instantiate_online(input, output, id == 17);
   if (id == 19) return generic_attention::instantiate_head_store(input, output);
-  if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
   if (id == 24) return generic_attention::instantiate_pack(input, output);
   if (id == 25 || id == 26) return instantiate_paged_slots(input, output, id == 26);
+  if (id == 27) return generic_attention::instantiate_decode_reduce(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
