@@ -181,6 +181,55 @@ int main(int argc, char** argv) {
     check_kernel(instantiate, layouts, "gk_attn_tile_indices_i32_v1",
                  {dynamic_map, tensor(DATA_I32, {8}), tensor(DATA_I32, {4, 16}),
                   tensor(DATA_I32, {1})}, {tensor(DATA_I32, {64, 16})}, nullptr);
+    {
+      const auto get_guids = reinterpret_cast<pfnGetKernelGuids>(dlsym(library, "GetKernelGuids"));
+      const auto infer = reinterpret_cast<pfnGetShapeInference>(dlsym(library, "GetShapeInference"));
+      if (!get_guids || !infer) throw std::runtime_error("dynamic rotary entry point missing");
+      uint32_t count = 0;
+      if (get_guids(DEVICE_ID_GAUDI2, &count, nullptr) != GLUE_SUCCESS)
+        throw std::runtime_error("GUID count failed");
+      std::vector<GuidInfo> guids(count);
+      if (get_guids(DEVICE_ID_GAUDI2, &count, guids.data()) != GLUE_SUCCESS)
+        throw std::runtime_error("GUID query failed");
+      const GuidInfo* rotary_guid = nullptr;
+      for (const auto& guid : guids)
+        if (std::strcmp(guid.name, "gk_rotary_bf16_v1") == 0) rotary_guid = &guid;
+      if (!rotary_guid || !rotary_guid->supportsDynamicShapes || !rotary_guid->nameHash.Value)
+        throw std::runtime_error("rotary dynamic shape support is not advertised");
+      auto cache = tensor(DATA_BF16, {64, 131072});
+      cache.geometry.minSizes[1] = 1;
+      std::vector<Tensor> inputs{tensor(DATA_BF16, {128, 4}), tensor(DATA_BF16, {64, 4}),
+                                 tensor(DATA_I32, {4}), cache, tensor(DATA_I32, {1})};
+      std::vector<Tensor> outputs{inputs[0], inputs[1]};
+      int32_t rotary_params[]{64, 64, 1};
+      HabanaKernelParams params{};
+      std::strcpy(params.guid.name, rotary_guid->name);
+      params.inputTensorNr = inputs.size(); params.inputTensors = inputs.data();
+      params.outputTensorNr = outputs.size(); params.outputTensors = outputs.data();
+      params.nodeParams.nodeParams = rotary_params; params.nodeParams.nodeParamsSize = sizeof(rotary_params);
+      std::vector<TensorAccessPattern> in_patterns(inputs.size()), out_patterns(outputs.size());
+      HabanaKernelInstantiation instance{};
+      instance.inputTensorAccessPattern = in_patterns.data();
+      instance.outputTensorAccessPattern = out_patterns.data();
+      if (instantiate(&params, &instance) != GLUE_INSUFFICIENT_ELF_BUFFER)
+        throw std::runtime_error("rotary rejected dynamic cache length");
+      inputs[3].geometry.minSizes[1] = 0;
+      if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_SIZE)
+        throw std::runtime_error("rotary accepted zero cache length");
+      TensorShapeInfo q_shape{}, k_shape{}, q_result{}, k_result{};
+      q_shape.geometry = inputs[0].geometry; k_shape.geometry = inputs[1].geometry;
+      TensorShapeInfo* shape_inputs[]{&q_shape, &k_shape, &q_shape, &q_shape, &q_shape};
+      TensorShapeInfo* shape_outputs[]{&q_result, &k_result};
+      ShapeInferenceParams shape_params{};
+      std::strcpy(shape_params.guid.name, rotary_guid->name);
+      shape_params.inputTensors = shape_inputs; shape_params.inputTensorsNr = 5;
+      shape_params.outputTensorsNr = 2;
+      ShapeInferenceOutput shape_result{}; shape_result.outputTensors = shape_outputs;
+      if (infer(DEVICE_ID_GAUDI2, &shape_params, &shape_result) != GLUE_SUCCESS ||
+          q_result.geometry.maxSizes[0] != 128 || k_result.geometry.maxSizes[0] != 64 ||
+          q_result.geometry.maxSizes[1] != 4 || k_result.geometry.maxSizes[1] != 4)
+        throw std::runtime_error("rotary output shape inference failed");
+    }
     dlclose(library);
     std::cout << "generic norm and attention access axes and layouts passed\n";
     return 0;

@@ -245,7 +245,7 @@ GlueCodeReturn instantiate_rotary(HabanaKernelParams* input, HabanaKernelInstant
       metadata.dims != 1 || metadata.maxSizes[0] != 1 || metadata.minSizes[0] != 1 ||
       cache.dims != 2 || cache.maxSizes[0] != static_cast<unsigned>(params.rotary_dim) ||
       cache.minSizes[0] != cache.maxSizes[0] || !cache.maxSizes[1] || cache.maxSizes[1] > INT_MAX ||
-      cache.minSizes[1] != cache.maxSizes[1]) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+      !cache.minSizes[1] || cache.minSizes[1] > cache.maxSizes[1]) return GLUE_INCOMPATIBLE_INPUT_SIZE;
   for (unsigned i = 0; i < 2; ++i) {
     const auto& source = input->inputTensors[i].geometry;
     const auto& result = input->outputTensors[i].geometry;
@@ -488,7 +488,12 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
   if (guids && *count && capacity > 3) std::strcpy(guids[3].name, kSilu);
   if (guids && *count && capacity > 4) std::strcpy(guids[4].name, kKvStore);
-  if (guids && *count && capacity > 5) std::strcpy(guids[5].name, kRotary);
+  if (guids && *count && capacity > 5) {
+    std::strcpy(guids[5].name, kRotary);
+    guids[5].nameHash.Value = 0x003dd119de37e582ULL;
+    guids[5].kernelProperties = 0;
+    guids[5].supportsDynamicShapes = 1;
+  }
   if (guids && *count && capacity > 6) std::strcpy(guids[6].name, kPagedMetadata);
   if (guids && *count && capacity > 7) std::strcpy(guids[7].name, kTokenIndices);
   if (guids && *count && capacity > 8) std::strcpy(guids[8].name, kCastF32ToBf16);
@@ -578,6 +583,14 @@ extern "C" GlueCodeReturn GetShapeInference(DeviceId, const ShapeInferenceParams
                                               ShapeInferenceOutput* output) {
   const int id = kind(input->pGuid ? input->pGuid->name : input->guid.name);
   if (id < 0) return GLUE_NODE_NOT_FOUND;
+  if (id == 6) {
+    if (!output || input->inputTensorsNr != 5 || input->outputTensorsNr != 2 ||
+        !input->inputTensors || !input->inputTensors[0] || !input->inputTensors[1] ||
+        !output->outputTensors || !output->outputTensors[0] || !output->outputTensors[1])
+      return GLUE_INCOMPATIBLE_INPUT_COUNT;
+    output->outputTensors[0]->geometry = input->inputTensors[0]->geometry;
+    output->outputTensors[1]->geometry = input->inputTensors[1]->geometry;
+  }
   if (id == 23) {
     if (!output || input->inputTensorsNr != 4 || input->outputTensorsNr != 1 ||
         !input->inputTensors || !input->inputTensors[2] || !output->outputTensors ||
