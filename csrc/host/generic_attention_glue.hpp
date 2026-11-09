@@ -13,7 +13,8 @@ extern "C" unsigned char _binary_attn_online_merge_f32_o_start, _binary_attn_onl
 extern "C" unsigned char _binary_attn_online_finalize_bf16_o_start, _binary_attn_online_finalize_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_head_major_bf16_o_start, _binary_kv_store_head_major_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_head_major64_bf16_o_start, _binary_kv_store_head_major64_bf16_o_end;
-extern "C" unsigned char _binary_attn_decode_reduce_bf16_o_start, _binary_attn_decode_reduce_bf16_o_end;
+extern "C" unsigned char _binary_attn_decode_exp_f32_o_start, _binary_attn_decode_exp_f32_o_end;
+extern "C" unsigned char _binary_attn_decode_normalize_bf16_o_start, _binary_attn_decode_normalize_bf16_o_end;
 extern "C" unsigned char _binary_attn_direct_softmax_bf16_o_start, _binary_attn_direct_softmax_bf16_o_end;
 extern "C" unsigned char _binary_attn_tile_indices_i32_o_start, _binary_attn_tile_indices_i32_o_end;
 
@@ -24,7 +25,8 @@ constexpr const char* kPack = "gk_attn_pack_stats_f32_v1";
 constexpr const char* kMerge = "gk_attn_online_merge_f32_v1";
 constexpr const char* kFinalize = "gk_attn_online_finalize_bf16_v1";
 constexpr const char* kHeadStore = "gk_kv_store_head_major_bf16_v1";
-constexpr const char* kDecodeReduce = "gk_attn_decode_reduce_bf16_v1";
+constexpr const char* kDecodeExp = "gk_attn_decode_exp_f32_v1";
+constexpr const char* kDecodeNormalize = "gk_attn_decode_normalize_bf16_v1";
 constexpr const char* kDirectSoftmax = "gk_attn_direct_softmax_bf16_v1";
 constexpr const char* kTileIndices = "gk_attn_tile_indices_i32_v1";
 
@@ -51,35 +53,6 @@ inline GlueCodeReturn binary(HabanaKernelInstantiation* output, unsigned char* s
   if (capacity < output->kernel.elfSize) return GLUE_INSUFFICIENT_ELF_BUFFER;
   std::memcpy(output->kernel.kernelElf, start, output->kernel.elfSize);
   return GLUE_SUCCESS;
-}
-
-inline GlueCodeReturn instantiate_decode_reduce(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
-  if (input->inputTensorNr != 3) return GLUE_INCOMPATIBLE_INPUT_COUNT;
-  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  const auto& data = input->inputTensors[2].geometry;
-  const unsigned long d = data.maxSizes[0], tiles = data.maxSizes[1], heads = data.maxSizes[2];
-  if ((d != 64 && d != 128) || !tiles || tiles > 16 || !heads || heads > 256 ||
-      !shape(input->inputTensors[0], DATA_F32, {64, tiles, heads}) ||
-      !shape(input->inputTensors[1], DATA_F32, {64, tiles, heads}) ||
-      !shape(input->inputTensors[2], DATA_F32, {d, tiles, heads}) ||
-      !shape(input->outputTensors[0], DATA_BF16, {d, heads, 1}))
-    return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  output->indexSpaceRank = 3;
-  output->indexSpaceGeometry[0] = heads;
-  output->indexSpaceGeometry[1] = output->indexSpaceGeometry[2] = 1;
-  for (unsigned i = 0; i < 3; ++i) {
-    auto& access = output->inputTensorAccessPattern[i];
-    mapped(access, 0, 1, (i == 2 ? d : 64) - 1, 0);
-    mapped(access, 1, 2, tiles - 1, 0);
-    mapped(access, 2, 0, 0, 1);
-  }
-  auto& result = output->outputTensorAccessPattern[0];
-  mapped(result, 0, 1, d - 1, 0);
-  mapped(result, 1, 0, 0, 1);
-  mapped(result, 2, 2, 0, 0);
-  output->kernel.paramsNr = 0;
-  return binary(output, &_binary_attn_decode_reduce_bf16_o_start, &_binary_attn_decode_reduce_bf16_o_end);
 }
 
 inline GlueCodeReturn instantiate_tile_indices(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
@@ -190,6 +163,71 @@ inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, Haba
   std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
   return binary(output, &_binary_attn_direct_softmax_bf16_o_start,
                 &_binary_attn_direct_softmax_bf16_o_end);
+}
+
+// Long single-row softmax uses an internal FP32 exponential tensor and a
+// vector of repeated sums; the graph normalizes and casts before the PV MME.
+inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                         bool exponent) {
+  if (input->inputTensorNr != (exponent ? 3u : 2u)) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != (exponent ? 2u : 1u)) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if ((exponent && (input->nodeParams.nodeParamsSize != sizeof(float) || !input->nodeParams.nodeParams)) ||
+      (!exponent && input->nodeParams.nodeParamsSize))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  float scale = 0;
+  if (exponent) {
+    std::memcpy(&scale, input->nodeParams.nodeParams, sizeof(scale));
+    if (!std::isfinite(scale) || scale <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  }
+  const auto& data = input->inputTensors[0].geometry;
+  const unsigned long keys = data.maxSizes[0], heads = data.maxSizes[2];
+  if (keys <= 512 || keys > 8192 || keys % 128 || !heads || heads > 256 ||
+      !shape(input->inputTensors[0], DATA_F32, {keys, 1, heads}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (exponent) {
+    if (!shape(input->inputTensors[1], DATA_I32, {1}) ||
+        !shape(input->inputTensors[2], DATA_I32, {3}) ||
+        !shape(input->outputTensors[0], DATA_F32, {keys, 1, heads}) ||
+        !shape(input->outputTensors[1], DATA_F32, {64, heads}))
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  } else if (!shape(input->inputTensors[1], DATA_F32, {64, heads}) ||
+             !shape(input->outputTensors[0], DATA_BF16, {keys, 1, heads})) {
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
+  output->indexSpaceRank = 3;
+  output->indexSpaceGeometry[0] = heads;
+  output->indexSpaceGeometry[1] = 1;
+  output->indexSpaceGeometry[2] = 1;
+  for (unsigned i = 0; i < input->inputTensorNr; ++i) {
+    auto& access = output->inputTensorAccessPattern[i];
+    if (i == 0) {
+      mapped(access, 0, 2, keys - 1, 0);
+      mapped(access, 1, 1, 0, 0);
+      mapped(access, 2, 0, 0, 1);
+    } else if (!exponent && i == 1) {
+      mapped(access, 0, 2, 63, 0);
+      mapped(access, 1, 0, 0, 1);
+    } else {
+      access.allRequired = 1;
+    }
+  }
+  for (unsigned i = 0; i < input->outputTensorNr; ++i) {
+    auto& access = output->outputTensorAccessPattern[i];
+    if (exponent && i == 1) {
+      mapped(access, 0, 2, 63, 0);
+      mapped(access, 1, 0, 0, 1);
+    } else {
+      mapped(access, 0, 2, keys - 1, 0);
+      mapped(access, 1, 1, 0, 0);
+      mapped(access, 2, 0, 0, 1);
+    }
+  }
+  output->kernel.paramsNr = exponent ? 1 : 0;
+  if (exponent) std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
+  if (exponent)
+    return binary(output, &_binary_attn_decode_exp_f32_o_start, &_binary_attn_decode_exp_f32_o_end);
+  return binary(output, &_binary_attn_decode_normalize_bf16_o_start,
+                &_binary_attn_decode_normalize_bf16_o_end);
 }
 
 inline GlueCodeReturn instantiate_pack(HabanaKernelParams* input, HabanaKernelInstantiation* output) {

@@ -57,7 +57,8 @@ def main():
                          ("attn_pack_stats_f32", "generic_dense/attn_pack_stats_f32.c"),
                          ("attn_direct_softmax_bf16", "generic_dense/attn_direct_softmax_bf16.c"),
                          ("attn_tile_indices_i32", "generic_dense/attn_tile_indices_i32.c"),
-                         ("attn_decode_reduce_bf16", "generic_dense/attn_decode_reduce_bf16.c"),
+                         ("attn_decode_exp_f32", "generic_dense/attn_decode_exp_f32.c"),
+                         ("attn_decode_normalize_bf16", "generic_dense/attn_decode_normalize_bf16.c"),
                          ("attn_online_merge_f32", "generic_dense/attn_online_merge_f32.c"),
                          ("attn_online_finalize_bf16", "generic_dense/attn_online_finalize_bf16.c"),
                          ("index_put_i64", "generic_dense/index_put_i64.c")):
