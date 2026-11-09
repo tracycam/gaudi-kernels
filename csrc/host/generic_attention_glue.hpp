@@ -181,7 +181,7 @@ inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernel
   }
   const auto& data = input->inputTensors[0].geometry;
   const unsigned long keys = data.maxSizes[0], heads = data.maxSizes[2];
-  if (keys <= 512 || keys > 4096 || keys % 128 || !heads || heads > 256 ||
+  if (keys <= 512 || keys > 8192 || keys % 128 || !heads || heads > 256 ||
       !shape(input->inputTensors[0], DATA_F32, {keys, 1, heads}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (exponent) {
