@@ -29,6 +29,7 @@ constexpr const char* kDecodeExp = "gk_attn_decode_exp_f32_v1";
 constexpr const char* kDecodeNormalize = "gk_attn_decode_normalize_bf16_v1";
 constexpr const char* kDirectSoftmax = "gk_attn_direct_softmax_bf16_v1";
 constexpr const char* kTileIndices = "gk_attn_tile_indices_i32_v1";
+constexpr unsigned long kMaxScoreElements = 8UL * 1024 * 1024;
 
 inline bool shape(const Tensor& tensor, TensorDataType type, std::initializer_list<unsigned long> sizes) {
   const auto& g = tensor.geometry;
@@ -142,7 +143,7 @@ inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, Haba
   const auto& data = input->inputTensors[0].geometry;
   const unsigned long keys = data.maxSizes[0], rows = data.maxSizes[1], heads = data.maxSizes[2];
   if (!keys || keys > 512 || keys % 128 || !rows || rows > 256 || !heads || heads > 256 ||
-      keys * rows * heads > 4UL * 1024 * 1024 ||
+      keys * rows * heads > kMaxScoreElements ||
       !shape(input->inputTensors[0], DATA_F32, {keys, rows, heads}) ||
       !shape(input->inputTensors[1], DATA_I32, {rows}) ||
       !shape(input->inputTensors[2], DATA_I32, {3}) ||
@@ -266,7 +267,7 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
   const unsigned long keys = score.maxSizes[0], rows = score.maxSizes[1], heads = score.maxSizes[2];
   // Keep each score tile bounded. Full prompts are dispatched as query tiles.
   if (!keys || keys > 512 || keys % 128 || !rows || rows > 256 || !heads || heads > 256 ||
-      keys * rows * heads > 4UL * 1024 * 1024 ||
+      keys * rows * heads > kMaxScoreElements ||
       !shape(input->inputTensors[0], DATA_F32, {keys, rows, heads}) ||
       !shape(input->inputTensors[1], DATA_I32, {rows}) || !shape(input->inputTensors[2], DATA_I32, {3}) ||
       !shape(input->outputTensors[0], DATA_BF16, {keys, rows, heads}) ||
