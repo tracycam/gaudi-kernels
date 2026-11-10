@@ -65,7 +65,14 @@ def main():
                          ("fp8_block_quant", "block_fp8_framework/activation_native.c"),
                          ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c"),
                          ("fp8_token_quant", "block_fp8_framework/activation_token.c"),
-                         ("fp8_channel_finish", "block_fp8_framework/channel_finish.c")):
+                         ("fp8_channel_finish", "block_fp8_framework/channel_finish.c"),
+                         ("fp8_act_row_scale", "block_fp8_framework/act_row_scale_f32.c"),
+                         ("fp8_quant_act_hybrid", "block_fp8_framework/quant_act_hybrid.c"),
+                         ("fp8_dequant_weight_1k", "block_fp8_framework/dequant_weight_bf16_1k.c"),
+                         ("fp8_weight_blk_scale", "block_fp8_framework/weight_blk_scale_f32.c"),
+                         ("fp8_dequant_weight_2k", "block_fp8_framework/dequant_weight_fp8_2k.c"),
+                         ("fp8_hybrid_epilogue", "block_fp8_framework/hybrid_epilogue_bf16.c"),
+                         ("fp8_hybrid_epilogue_bias", "block_fp8_framework/hybrid_epilogue_bias_bf16.c")):
         flags = []
         if name == "fp8_block_reduce":
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
@@ -85,6 +92,15 @@ def main():
             "fp8_token_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_channel_finish": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                    b"tensor bias", b"tensor output"],
+            "fp8_act_row_scale": [b"tensor input", b"tensor row_scale"],
+            "fp8_quant_act_hybrid": [b"tensor input", b"tensor row_scale", b"tensor out_1k", b"tensor out_2k"],
+            "fp8_dequant_weight_1k": [b"tensor input", b"tensor scales", b"tensor output"],
+            "fp8_weight_blk_scale": [b"tensor scales", b"tensor blk_scale"],
+            "fp8_dequant_weight_2k": [b"tensor input", b"tensor scales", b"tensor blk_scale", b"tensor output"],
+            "fp8_hybrid_epilogue": [b"tensor c0", b"tensor c1", b"tensor row_scale",
+                                    b"tensor blk_scale", b"tensor output"],
+            "fp8_hybrid_epilogue_bias": [b"tensor c0", b"tensor c1", b"tensor row_scale",
+                                         b"tensor blk_scale", b"tensor bias", b"tensor output"],
         }
         if name in contracts:
             verify_tpc_abi(out / f"{name}.o", root / f"csrc/tpc/{source}", contracts[name])

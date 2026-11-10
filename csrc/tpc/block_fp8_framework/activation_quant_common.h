@@ -27,3 +27,23 @@ static inline minifloat256 fp8_pack_half(float128 x, float64 scale, float64 reci
  packed=v_f8_pack_b(sparse,SW_GROUP_1|SW_STRIDE_2,packed);
  return v_f8_mov_dual_group_pack_b(packed,SW_PACK21,(minifloat256)0);
 }
+
+// Pack 128 scaled FP32 values (in native all_b even/odd BF16 lane order) into Gaudi2
+// FP8_143 (expBias=7) clamped to [-224, 224] without SW_LINEAR lane-unpack shuffles.
+static inline minifloat256 fp8_143_pack_all_clamped(float128 x) {
+ float64 c0=v_f32_min_b(v_f32_max_b(x.v1,-224.0f),224.0f);
+ float64 c1=v_f32_min_b(v_f32_max_b(x.v2,-224.0f),224.0f);
+ minifloat256 sparse=(minifloat256)0;
+ sparse=v_convert_f32_to_f8_b(c0,0,SW_RHNE|SW_CLIP_FP,sparse);
+ sparse=v_convert_f32_to_f8_b(c1,2,SW_RHNE|SW_CLIP_FP,sparse);
+ minifloat256 packed=v_f8_pack_b(sparse,SW_GROUP_0|SW_STRIDE_2,(minifloat256)0);
+ packed=v_f8_pack_b(sparse,SW_GROUP_1|SW_STRIDE_2,packed);
+ return v_f8_mov_dual_group_pack_b(packed,SW_PACK21,(minifloat256)0);
+}
+
+// Pack two adjacent 128-element clamped FP8_143 vectors (all_b lane order) into one 256-byte vector.
+static inline minifloat256 fp8_143_pack256_all_clamped(float128 lo, float128 hi) {
+ minifloat256 p0=fp8_143_pack_all_clamped(lo);
+ minifloat256 p1=fp8_143_pack_all_clamped(hi);
+ return (minifloat256)v_f32_mov_dual_group_all_b((float64)p1,0xffffffff,0,1,0,1,MkWrA(0,0,3,3),(float64)p0);
+}
