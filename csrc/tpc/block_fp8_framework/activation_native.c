@@ -29,7 +29,12 @@ void main(tensor input,tensor output,tensor scales) {
    int5 p={g*128,row,0,0,0};
    float128 x=convert_bfloat128_to_float128(v_bf16_ld_tnsr_b(p,input),SW_LINEAR);
    float64 a=(float64)((uint64)x.v1 & 0x7fffffff), b=(float64)((uint64)x.v2 & 0x7fffffff);
-   float64 scale=v_f32_max_b(v_f32_reduce_max(v_f32_max_b(a,b)),1e-10f)*(1.0f/448.0f);
+   float64 maximum=v_f32_max_b(v_f32_reduce_max(v_f32_max_b(a,b)),1e-10f);
+   // Correct the rounded reciprocal product to the FP32 amax/448 contract.
+   // One scale ULP can otherwise move multiple activations across FP8 ties.
+   float64 scale=maximum*(1.0f/448.0f);
+   float64 scale_residual=v_f32_mac_b(-scale,448.0f,maximum);
+   scale=v_f32_mac_b(scale_residual,(1.0f/448.0f),scale);
    float64 reciprocal=v_reciprocal_f32(scale);
    float128 q; q.v1=quant(x.v1,scale,reciprocal);q.v2=quant(x.v2,scale,reciprocal);
    bfloat128 bf=convert_float128_to_bfloat128(q,SW_LINEAR|SW_RHNE);
