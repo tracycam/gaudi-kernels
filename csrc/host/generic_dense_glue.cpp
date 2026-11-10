@@ -207,20 +207,22 @@ GlueCodeReturn instantiate_silu(HabanaKernelParams* input, HabanaKernelInstantia
   if (result.dims != 2 || result.maxSizes[0] != width || result.maxSizes[1] != source.maxSizes[1] ||
       result.minSizes[0] != result.maxSizes[0] || result.minSizes[1] != result.maxSizes[1])
     return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  constexpr unsigned kColStep = 512;
+  constexpr unsigned kRowTile = 8;
   output->indexSpaceRank = 2;
-  output->indexSpaceGeometry[0] = (width + 127) / 128;
-  output->indexSpaceGeometry[1] = source.maxSizes[1];
+  output->indexSpaceGeometry[0] = (width + kColStep - 1) / kColStep;
+  output->indexSpaceGeometry[1] = (source.maxSizes[1] + kRowTile - 1) / kRowTile;
   for (unsigned i = 0; i < 2; ++i) {
     auto& access = i ? output->outputTensorAccessPattern[0] : output->inputTensorAccessPattern[0];
     access.allRequired = 0;
     access.mapping[0].indexSpaceDim = 0;
-    access.mapping[0].a = 128;
+    access.mapping[0].a = kColStep;
     access.mapping[0].start_b = 0;
-    access.mapping[0].end_b = (i ? 0 : width) + 127;
+    access.mapping[0].end_b = (i ? 0 : width) + kColStep - 1;
     access.mapping[1].indexSpaceDim = 1;
-    access.mapping[1].a = 1;
+    access.mapping[1].a = kRowTile;
     access.mapping[1].start_b = 0;
-    access.mapping[1].end_b = 0;
+    access.mapping[1].end_b = kRowTile - 1;
   }
   output->kernel.paramsNr = 0;
   const unsigned size = static_cast<unsigned>(&_binary_silu_and_mul_bf16_o_end -
