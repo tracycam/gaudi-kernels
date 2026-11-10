@@ -20,6 +20,9 @@ extern "C" unsigned char _binary_paged_alloc_i32_o_start, _binary_paged_alloc_i3
 extern "C" unsigned char _binary_paged_free_i32_o_start, _binary_paged_free_i32_o_end;
 extern "C" unsigned char _binary_cast_f32_to_bf16_o_start, _binary_cast_f32_to_bf16_o_end;
 extern "C" unsigned char _binary_index_put_i64_o_start, _binary_index_put_i64_o_end;
+extern "C" unsigned char _binary_argmax_parts_bf16_o_start, _binary_argmax_parts_bf16_o_end;
+extern "C" unsigned char _binary_argmax_parts_f32_o_start, _binary_argmax_parts_f32_o_end;
+extern "C" unsigned char _binary_argmax_finish_i32_o_start, _binary_argmax_finish_i32_o_end;
 
 namespace {
 constexpr const char* kAdd = "gk_add_bf16_v1";
@@ -36,6 +39,9 @@ constexpr const char* kCastF32ToBf16 = "gk_cast_f32_to_bf16_v1";
 constexpr const char* kIndexPutI64 = "gk_index_put_i64_v1";
 constexpr const char* kPagedAlloc = "gk_paged_alloc_i32_v1";
 constexpr const char* kPagedFree = "gk_paged_free_i32_v1";
+constexpr const char* kArgmaxBf16 = "gk_argmax_parts_bf16_v1";
+constexpr const char* kArgmaxF32 = "gk_argmax_parts_f32_v1";
+constexpr const char* kArgmaxFinish = "gk_argmax_finish_i32_v1";
 int kind(const char* name) {
   if (!name) return -1;
   if (std::strcmp(name, kAdd) == 0) return 0;
@@ -50,6 +56,9 @@ int kind(const char* name) {
   if (std::strcmp(name, kIndexPutI64) == 0) return 10;
   if (std::strcmp(name, kPagedAlloc) == 0) return 25;
   if (std::strcmp(name, kPagedFree) == 0) return 26;
+  if (std::strcmp(name, kArgmaxBf16) == 0) return 27;
+  if (std::strcmp(name, kArgmaxF32) == 0) return 28;
+  if (std::strcmp(name, kArgmaxFinish) == 0) return 29;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
@@ -62,6 +71,66 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
   if (std::strcmp(name, generic_attention::kPack) == 0) return 24;
   return -1;
+}
+
+GlueCodeReturn instantiate_argmax(HabanaKernelParams* input, HabanaKernelInstantiation* output, int id) {
+  const bool finish = id == 29;
+  if (input->inputTensorNr != (finish ? 3u : 1u)) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != (finish ? 1u : 3u)) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->nodeParams.nodeParamsSize != (finish ? sizeof(int) : 2 * sizeof(int)) ||
+      !input->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  int params[2]{};
+  std::memcpy(params, input->nodeParams.nodeParams, input->nodeParams.nodeParamsSize);
+  const auto& source = input->inputTensors[0].geometry;
+  const auto rows = finish ? source.maxSizes[2] : source.maxSizes[1];
+  const auto parts = finish ? source.maxSizes[1] : input->outputTensors[0].geometry.maxSizes[1];
+  if (!rows || rows > INT_MAX || !parts || parts > 24) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (finish) {
+    if (params[0] != static_cast<int>(parts) ||
+        !generic_attention::shape(input->inputTensors[0], DATA_F32, {64, parts, rows}) ||
+        !generic_attention::shape(input->inputTensors[1], DATA_I32, {64, parts, rows}) ||
+        !generic_attention::shape(input->inputTensors[2], DATA_I32, {64, parts, rows}) ||
+        !generic_attention::shape(input->outputTensors[0], DATA_I32, {1, rows}))
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+    output->indexSpaceRank = 2;
+    output->indexSpaceGeometry[0] = rows;
+    output->indexSpaceGeometry[1] = 1;
+    for (unsigned i = 0; i < 3; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+    generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 1, 0, 0);
+    generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 0, 0, 1);
+    output->kernel.paramsNr = 1;
+    std::memcpy(output->kernel.scalarParams, params, sizeof(int));
+    return generic_attention::binary(output, &_binary_argmax_finish_i32_o_start, &_binary_argmax_finish_i32_o_end);
+  }
+  const auto width = source.maxSizes[0];
+  const auto expected_chunk = ((width + 127) / 128 + parts - 1) / parts;
+  if (!width || width > INT_MAX || params[0] != static_cast<int>(width) ||
+      params[1] != static_cast<int>(expected_chunk) ||
+      !generic_attention::shape(input->inputTensors[0], id == 27 ? DATA_BF16 : DATA_F32, {width, rows}) ||
+      !generic_attention::shape(input->outputTensors[0], DATA_F32, {64, parts, rows}) ||
+      !generic_attention::shape(input->outputTensors[1], DATA_I32, {64, parts, rows}) ||
+      !generic_attention::shape(input->outputTensors[2], DATA_I32, {64, parts, rows}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  output->indexSpaceRank = 3;
+  output->indexSpaceGeometry[0] = parts;
+  output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[2] = 1;
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 0,
+                            static_cast<unsigned>(expected_chunk * 128 - 1),
+                            static_cast<unsigned>(expected_chunk * 128));
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, 0, 1);
+  for (unsigned i = 0; i < 3; ++i) {
+    auto& access = output->outputTensorAccessPattern[i];
+    generic_attention::mapped(access, 0, 2, 63, 0);
+    generic_attention::mapped(access, 1, 0, 0, 1);
+    generic_attention::mapped(access, 2, 1, 0, 1);
+  }
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, params, 2 * sizeof(int));
+  return id == 27 ? generic_attention::binary(output, &_binary_argmax_parts_bf16_o_start,
+                                              &_binary_argmax_parts_bf16_o_end)
+                  : generic_attention::binary(output, &_binary_argmax_parts_f32_o_start,
+                                              &_binary_argmax_parts_f32_o_end);
 }
 
 GlueCodeReturn instantiate_norm(HabanaKernelParams* input, HabanaKernelInstantiation* output, bool fused) {
@@ -482,7 +551,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 23 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 26 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -516,6 +585,9 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 20) std::strcpy(guids[20].name, generic_attention::kPack);
   if (guids && *count && capacity > 21) std::strcpy(guids[21].name, kPagedAlloc);
   if (guids && *count && capacity > 22) std::strcpy(guids[22].name, kPagedFree);
+  if (guids && *count && capacity > 23) std::strcpy(guids[23].name, kArgmaxBf16);
+  if (guids && *count && capacity > 24) std::strcpy(guids[24].name, kArgmaxF32);
+  if (guids && *count && capacity > 25) std::strcpy(guids[25].name, kArgmaxFinish);
   return GLUE_SUCCESS;
 }
 
@@ -539,6 +611,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
   if (id == 24) return generic_attention::instantiate_pack(input, output);
   if (id == 25 || id == 26) return instantiate_paged_slots(input, output, id == 26);
+  if (id == 27 || id == 28 || id == 29) return instantiate_argmax(input, output, id);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;

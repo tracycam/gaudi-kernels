@@ -61,7 +61,10 @@ def main():
                          ("attn_decode_normalize_bf16", "generic_dense/attn_decode_normalize_bf16.c"),
                          ("attn_online_merge_f32", "generic_dense/attn_online_merge_f32.c"),
                          ("attn_online_finalize_bf16", "generic_dense/attn_online_finalize_bf16.c"),
-                         ("index_put_i64", "generic_dense/index_put_i64.c")):
+                         ("index_put_i64", "generic_dense/index_put_i64.c"),
+                         ("argmax_parts_bf16", "generic_dense/argmax_parts_bf16.c"),
+                         ("argmax_parts_f32", "generic_dense/argmax_parts_f32.c"),
+                         ("argmax_finish_i32", "generic_dense/argmax_finish_i32.c")):
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
