@@ -13,7 +13,10 @@ void main(tensor input,tensor output,tensor scales) {
    int5 p={g*128,row,0,0,0};
    float128 x=convert_bfloat128_to_float128(v_bf16_ld_tnsr_b(p,input),SW_LINEAR);
    float64 a=(float64)((uint64)x.v1 & 0x7fffffff), b=(float64)((uint64)x.v2 & 0x7fffffff);
-   float64 maximum=v_f32_max_b(v_f32_reduce_max(v_f32_max_b(a,b)),1e-10f);
+   float64 maximum=v_f32_reduce_max(v_f32_max_b(a,b));
+   // An all-zero group produces zero regardless of scale. Use a nonzero
+   // denominator only for that case; positive maxima must not be clamped.
+   maximum=v_f32_sel_eq_f32_b(maximum,0.0f,1.0f,maximum);
    // Correct the rounded reciprocal product to the FP32 amax/448 contract.
    // One scale ULP can otherwise move multiple activations across FP8 ties.
    float64 scale=fp8_activation_scale(maximum);
