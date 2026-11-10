@@ -5,12 +5,69 @@
 
 extern "C" unsigned char _binary_fp8_block_quant_o_start, _binary_fp8_block_quant_o_end;
 extern "C" unsigned char _binary_fp8_block_reduce_o_start, _binary_fp8_block_reduce_o_end;
+extern "C" unsigned char _binary_fp8_token_quant_o_start, _binary_fp8_token_quant_o_end;
+extern "C" unsigned char _binary_fp8_channel_finish_o_start, _binary_fp8_channel_finish_o_end;
 
 namespace generic_fp8 {
 using namespace tpc_lib_api;
 
 constexpr const char* kQuant = "gk_fp8_block_quant_bf16_v1";
 constexpr const char* kReduce = "gk_fp8_block_reduce_bf16_v1";
+constexpr const char* kTokenQuant = "gk_fp8_token_quant_bf16_v1";
+constexpr const char* kChannelFinish = "gk_fp8_channel_finish_bf16_v1";
+
+inline GlueCodeReturn instantiate_token_quant(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& x = input->inputTensors[0].geometry;
+  const auto width = x.maxSizes[0], rows = x.maxSizes[1];
+  if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
+      !generic_attention::shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
+      !generic_attention::shape(input->outputTensors[0], DATA_F8_143, {width, rows}) ||
+      !generic_attention::shape(input->outputTensors[1], DATA_F32, {1, rows}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  output->indexSpaceRank = 2;
+  output->indexSpaceGeometry[0] = rows;
+  output->indexSpaceGeometry[1] = 1;
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 1, width - 1, 0);
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 0, 0, 1);
+  for (unsigned i = 0; i < 2; ++i) {
+    generic_attention::mapped(output->outputTensorAccessPattern[i], 0, 1, i == 0 ? width - 1 : 0, 0);
+    generic_attention::mapped(output->outputTensorAccessPattern[i], 1, 0, 0, 1);
+  }
+  output->kernel.paramsNr = 0;
+  return generic_attention::binary(output, &_binary_fp8_token_quant_o_start, &_binary_fp8_token_quant_o_end);
+}
+
+inline GlueCodeReturn instantiate_channel_finish(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 4) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& p = input->inputTensors[0].geometry;
+  const auto width = p.maxSizes[0], rows = p.maxSizes[1];
+  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 4096 ||
+      !generic_attention::shape(input->inputTensors[0], DATA_F32, {width, rows}) ||
+      !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
+      !generic_attention::shape(input->inputTensors[2], DATA_F32, {width}) ||
+      !generic_attention::shape(input->inputTensors[3], DATA_F32, {width}) ||
+      !generic_attention::shape(input->outputTensors[0], DATA_BF16, {width, rows}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  output->indexSpaceRank = 3;
+  output->indexSpaceGeometry[0] = width / 128;
+  output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[2] = 1;
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 0, 127, 128);
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, 0, 1);
+  generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 2, 0, 0);
+  generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, 0, 1);
+  for (unsigned i = 2; i < 4; ++i)
+    generic_attention::mapped(output->inputTensorAccessPattern[i], 0, 0, 127, 128);
+  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, 127, 128);
+  generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, 0, 1);
+  output->kernel.paramsNr = 0;
+  return generic_attention::binary(output, &_binary_fp8_channel_finish_o_start, &_binary_fp8_channel_finish_o_end);
+}
 
 inline GlueCodeReturn instantiate_quant(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;

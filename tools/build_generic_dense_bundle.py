@@ -62,7 +62,9 @@ def main():
                          ("argmax_parts_f32", "generic_dense/argmax_parts_f32.c"),
                          ("argmax_finish_i32", "generic_dense/argmax_finish_i32.c"),
                          ("fp8_block_quant", "block_fp8_framework/activation_native.c"),
-                         ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c")):
+                         ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c"),
+                         ("fp8_token_quant", "block_fp8_framework/activation_token.c"),
+                         ("fp8_channel_finish", "block_fp8_framework/channel_finish.c")):
         flags = ["-DROWS=4", "-DOUTPUT_BF16=1"] if name == "fp8_block_reduce" else []
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
@@ -75,6 +77,9 @@ def main():
             "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_block_reduce": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                  b"tensor bias", b"tensor output"],
+            "fp8_token_quant": [b"tensor input", b"tensor output", b"tensor scales"],
+            "fp8_channel_finish": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
+                                   b"tensor bias", b"tensor output"],
         }
         if name in contracts:
             verify_tpc_abi(out / f"{name}.o", root / f"csrc/tpc/{source}", contracts[name])

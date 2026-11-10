@@ -41,7 +41,8 @@ int main(int argc, char** argv) {
         "gk_attn_tile_indices_i32_v1", "gk_attn_pack_stats_f32_v1",
         "gk_paged_alloc_i32_v1", "gk_paged_free_i32_v1",
         "gk_argmax_parts_bf16_v1", "gk_argmax_parts_f32_v1", "gk_argmax_finish_i32_v1",
-        "gk_fp8_block_quant_bf16_v1", "gk_fp8_block_reduce_bf16_v1"};
+        "gk_fp8_block_quant_bf16_v1", "gk_fp8_block_reduce_bf16_v1",
+        "gk_fp8_token_quant_bf16_v1", "gk_fp8_channel_finish_bf16_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
 

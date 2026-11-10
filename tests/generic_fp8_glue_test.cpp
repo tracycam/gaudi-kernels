@@ -98,6 +98,50 @@ int main(int argc, char** argv) {
       shape(inputs[2], DATA_F32, {2, 3});
       if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_SIZE)
         throw std::runtime_error("invalid scale grid accepted");
+
+      params = {};
+      instance = {};
+      std::memset(in_access, 0, sizeof(in_access));
+      std::memset(out_access, 0, sizeof(out_access));
+      std::strcpy(params.guid.name, "gk_fp8_token_quant_bf16_v1");
+      params.inputTensorNr = 1;
+      params.outputTensorNr = 2;
+      params.inputTensors = inputs;
+      params.outputTensors = outputs;
+      instance.inputTensorAccessPattern = in_access;
+      instance.outputTensorAccessPattern = out_access;
+      shape(inputs[0], DATA_BF16, {256, rows});
+      shape(outputs[0], DATA_F8_143, {256, rows});
+      shape(outputs[1], DATA_F32, {1, rows});
+      if (instantiate(&params, &instance) != GLUE_INSUFFICIENT_ELF_BUFFER ||
+          !instance.kernel.elfSize || instance.indexSpaceRank != 2 ||
+          instance.indexSpaceGeometry[0] != rows)
+        throw std::runtime_error("token FP8 quant geometry rejected");
+      check_axes(inputs[0], in_access[0], instance.indexSpaceRank);
+      for (unsigned i = 0; i < 2; ++i) check_axes(outputs[i], out_access[i], instance.indexSpaceRank);
+
+      params = {};
+      instance = {};
+      std::memset(in_access, 0, sizeof(in_access));
+      std::memset(out_access, 0, sizeof(out_access));
+      std::strcpy(params.guid.name, "gk_fp8_channel_finish_bf16_v1");
+      params.inputTensorNr = 4;
+      params.outputTensorNr = 1;
+      params.inputTensors = inputs;
+      params.outputTensors = outputs;
+      instance.inputTensorAccessPattern = in_access;
+      instance.outputTensorAccessPattern = out_access;
+      shape(inputs[0], DATA_F32, {512, rows});
+      shape(inputs[1], DATA_F32, {1, rows});
+      shape(inputs[2], DATA_F32, {512});
+      shape(inputs[3], DATA_F32, {512});
+      shape(outputs[0], DATA_BF16, {512, rows});
+      if (instantiate(&params, &instance) != GLUE_INSUFFICIENT_ELF_BUFFER ||
+          !instance.kernel.elfSize || instance.indexSpaceRank != 3 ||
+          instance.indexSpaceGeometry[0] != 4 || instance.indexSpaceGeometry[1] != rows)
+        throw std::runtime_error("FP8 channel finish geometry rejected");
+      for (unsigned i = 0; i < 4; ++i) check_axes(inputs[i], in_access[i], instance.indexSpaceRank);
+      check_axes(outputs[0], out_access[0], instance.indexSpaceRank);
     }
     dlclose(library);
     std::cout << "FP8 Glue geometry, unique axes, ELF and invalid inputs passed\n";
