@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 
-def verify_kv_store_abi(obj, source):
+def verify_tpc_abi(obj, source, expected):
     # Tensor arguments determine TPC descriptor slots. An ELF and Glue with
     # different input counts write through unbound slots; verify both the
     # embedded source and the declared contract for the particular kernel.
@@ -19,15 +19,11 @@ def verify_kv_store_abi(obj, source):
                        check=True)
         data = embedded.read_bytes()
     if data != source.read_bytes():
-        raise RuntimeError("KV store object does not contain the requested source")
+        raise RuntimeError("TPC object does not contain the requested source")
     match = re.search(rb"\bvoid\s+main\s*\((.*?)\)\s*\{", data, re.DOTALL)
     args = [b" ".join(arg.split()) for arg in match.group(1).split(b",")] if match else []
-    expected = [b"tensor key", b"tensor value", b"tensor locations", b"tensor metadata",
-                b"tensor key_pool", b"tensor value_pool"]
-    if source.name in ("kv_store_head_major_bf16.c", "kv_store_head_major64_bf16.c"):
-        expected[4:] = [b"tensor old_pool", b"tensor pool"]
     if args != expected:
-        raise RuntimeError("KV store ELF tensor arguments do not match its Glue contract")
+        raise RuntimeError("TPC ELF tensor arguments do not match its Glue contract")
 
 
 def main():
@@ -64,12 +60,24 @@ def main():
                          ("index_put_i64", "generic_dense/index_put_i64.c"),
                          ("argmax_parts_bf16", "generic_dense/argmax_parts_bf16.c"),
                          ("argmax_parts_f32", "generic_dense/argmax_parts_f32.c"),
-                         ("argmax_finish_i32", "generic_dense/argmax_finish_i32.c")):
+                         ("argmax_finish_i32", "generic_dense/argmax_finish_i32.c"),
+                         ("fp8_block_quant", "block_fp8_framework/activation_native.c"),
+                         ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c")):
+        flags = ["-DROWS=4", "-DOUTPUT_BF16=1"] if name == "fp8_block_reduce" else []
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
-                        str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
+                        *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
-        if name in ("kv_store_bf16", "kv_store_head_major_bf16", "kv_store_head_major64_bf16"):
-            verify_kv_store_abi(out / f"{name}.o", root / f"csrc/tpc/{source}")
+        kv_prefix = [b"tensor key", b"tensor value", b"tensor locations", b"tensor metadata"]
+        contracts = {
+            "kv_store_bf16": kv_prefix + [b"tensor key_pool", b"tensor value_pool"],
+            "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
+            "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
+            "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
+            "fp8_block_reduce": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
+                                 b"tensor bias", b"tensor output"],
+        }
+        if name in contracts:
+            verify_tpc_abi(out / f"{name}.o", root / f"csrc/tpc/{source}", contracts[name])
         subprocess.run(["objcopy", "-I", "binary", "-O", "elf64-x86-64", "-B", "i386:x86-64",
                         f"{name}.o", f"{name}_x86.o"], cwd=out, check=True)
         objects.append(f"{name}_x86.o")

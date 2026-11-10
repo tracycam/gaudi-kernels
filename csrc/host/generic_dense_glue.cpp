@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <tpc_kernel_lib_interface.h>
 #include "generic_attention_glue.hpp"
+#include "generic_fp8_glue.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -59,6 +60,8 @@ int kind(const char* name) {
   if (std::strcmp(name, kArgmaxBf16) == 0) return 27;
   if (std::strcmp(name, kArgmaxF32) == 0) return 28;
   if (std::strcmp(name, kArgmaxFinish) == 0) return 29;
+  if (std::strcmp(name, generic_fp8::kQuant) == 0) return 30;
+  if (std::strcmp(name, generic_fp8::kReduce) == 0) return 31;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
@@ -551,7 +554,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 26 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 28 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -588,6 +591,8 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 23) std::strcpy(guids[23].name, kArgmaxBf16);
   if (guids && *count && capacity > 24) std::strcpy(guids[24].name, kArgmaxF32);
   if (guids && *count && capacity > 25) std::strcpy(guids[25].name, kArgmaxFinish);
+  if (guids && *count && capacity > 26) std::strcpy(guids[26].name, generic_fp8::kQuant);
+  if (guids && *count && capacity > 27) std::strcpy(guids[27].name, generic_fp8::kReduce);
   return GLUE_SUCCESS;
 }
 
@@ -612,6 +617,8 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 24) return generic_attention::instantiate_pack(input, output);
   if (id == 25 || id == 26) return instantiate_paged_slots(input, output, id == 26);
   if (id == 27 || id == 28 || id == 29) return instantiate_argmax(input, output, id);
+  if (id == 30) return generic_fp8::instantiate_quant(input, output);
+  if (id == 31) return generic_fp8::instantiate_reduce(input, output);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
