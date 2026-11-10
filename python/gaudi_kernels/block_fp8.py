@@ -8,6 +8,8 @@ channel scales. No decoded weight is returned or retained.
 from dataclasses import dataclass, replace
 import hashlib
 
+from .fp8_codec import reencode_e4m3fn_half
+
 
 def _hash(tensor):
     return hashlib.sha256(tensor.contiguous().view(__import__('torch').uint8).numpy().tobytes()).hexdigest()
@@ -69,17 +71,10 @@ def prepare_block_fp8(weight, scales, bias=None):
     if (scales.dtype != torch.float32 or tuple(scales.shape) != ((n+127)//128, g)
             or not bool(torch.isfinite(scales).all()) or bool((scales < 0).any())):
         raise ValueError('finite nonnegative FP32 local block128 scale grid required')
-    raw = weight.view(torch.uint8)
-    mag = (raw & 127).to(torch.int16)
-    if bool((mag == 127).any()):
-        raise ValueError('nonfinite OCP checkpoint code')
-    half = torch.where(mag >= 16, mag-8, (mag >> 1) + ((mag & 1) & ((mag >> 1) & 1))).to(torch.uint8)
+    encoded, compensated, rounded = reencode_e4m3fn_half(weight, scales.contiguous())
     packed = torch.zeros((n, g*128), dtype=torch.uint8)
-    packed[:, :k] = (raw & 128) | half
+    packed[:, :k] = encoded.view(torch.uint8)
     packed = packed.reshape(n, g, 128).permute(1, 0, 2).contiguous().view(torch.float8_e4m3fn)
-    compensated = (scales * 2).contiguous()
-    if not bool(torch.isfinite(compensated).all()):
-        raise ValueError('native-half compensation overflows FP32 scale')
     if bias is None:
         bias = torch.zeros(n, dtype=torch.float32)
     if (bias.device.type != 'cpu' or bias.dtype != torch.float32 or tuple(bias.shape) != (n,)
@@ -95,7 +90,7 @@ def prepare_block_fp8(weight, scales, bias=None):
     s16 = compensated.bfloat16().float()
     safe16 = bool(torch.isfinite(s16).all() and torch.isfinite((maxima*s16).bfloat16()).all())
     result = PreparedBlockFP8(packed, compensated, bias.contiguous().clone(), n, k,
-        _hash(weight), _hash(scales), int(((mag < 16) & ((mag & 1) != 0)).sum()),
+        _hash(weight), _hash(scales), rounded,
         bf16_fp32_scale_safe=safe32, bf16_bf16_scale_safe=safe16)
     result.validate()
     return result
