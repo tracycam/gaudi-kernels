@@ -131,6 +131,13 @@ int main(int argc, char** argv) {
     check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
                  {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})},
                  {probabilities, expanded_stats, expanded_stats}, &scale);
+    check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
+                 {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})},
+                 {probabilities, stats, stats}, &scale);
+    check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
+                 {tensor(DATA_F32, {512, 256, 56}), tensor(DATA_I32, {256}), tensor(DATA_I32, {3})},
+                 {tensor(DATA_BF16, {512, 256, 56}), tensor(DATA_F32, {256, 56}), tensor(DATA_F32, {256, 56})},
+                 &scale);
     check_kernel(instantiate, layouts, "gk_attn_pack_stats_f32_v1",
                  {expanded_stats, expanded_stats}, {stats, stats}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_merge_f32_v1",

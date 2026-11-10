@@ -50,6 +50,7 @@ def main():
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
                          ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c"),
                          ("attn_tile_softmax_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
+                         ("attn_tile_softmax_packed_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
                          ("attn_pack_stats_f32", "generic_dense/attn_pack_stats_f32.c"),
                          ("attn_direct_softmax_bf16", "generic_dense/attn_direct_softmax_bf16.c"),
                          ("attn_tile_indices_i32", "generic_dense/attn_tile_indices_i32.c"),
@@ -65,7 +66,11 @@ def main():
                          ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c"),
                          ("fp8_token_quant", "block_fp8_framework/activation_token.c"),
                          ("fp8_channel_finish", "block_fp8_framework/channel_finish.c")):
-        flags = ["-DROWS=4", "-DOUTPUT_BF16=1"] if name == "fp8_block_reduce" else []
+        flags = []
+        if name == "fp8_block_reduce":
+            flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
+        elif name == "attn_tile_softmax_packed_bf16":
+            flags = ["-DPACKED_STATS=1"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)

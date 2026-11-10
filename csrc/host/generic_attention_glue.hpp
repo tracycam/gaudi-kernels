@@ -8,6 +8,7 @@
 #include <initializer_list>
 
 extern "C" unsigned char _binary_attn_tile_softmax_bf16_o_start, _binary_attn_tile_softmax_bf16_o_end;
+extern "C" unsigned char _binary_attn_tile_softmax_packed_bf16_o_start, _binary_attn_tile_softmax_packed_bf16_o_end;
 extern "C" unsigned char _binary_attn_pack_stats_f32_o_start, _binary_attn_pack_stats_f32_o_end;
 extern "C" unsigned char _binary_attn_online_merge_f32_o_start, _binary_attn_online_merge_f32_o_end;
 extern "C" unsigned char _binary_attn_online_finalize_bf16_o_start, _binary_attn_online_finalize_bf16_o_end;
@@ -151,11 +152,11 @@ inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, Haba
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   output->indexSpaceRank = 3;
   output->indexSpaceGeometry[0] = heads;
-  output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[1] = (rows + 15) / 16;
   output->indexSpaceGeometry[2] = 1;
   for (auto* access : {&output->inputTensorAccessPattern[0], &output->outputTensorAccessPattern[0]}) {
     mapped(*access, 0, 2, keys - 1, 0);
-    mapped(*access, 1, 1, 0, 1);
+    mapped(*access, 1, 1, 15, 16);
     mapped(*access, 2, 0, 0, 1);
   }
   output->inputTensorAccessPattern[1].allRequired = 1;
@@ -265,35 +266,55 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
   if (!std::isfinite(scale) || scale <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& score = input->inputTensors[0].geometry;
   const unsigned long keys = score.maxSizes[0], rows = score.maxSizes[1], heads = score.maxSizes[2];
+  const unsigned long stat_rows = (rows + 63) / 64 * 64;
   // Keep each score tile bounded. Full prompts are dispatched as query tiles.
   if (!keys || keys > 512 || keys % 128 || !rows || rows > 256 || !heads || heads > 256 ||
       keys * rows * heads > kMaxScoreElements ||
       !shape(input->inputTensors[0], DATA_F32, {keys, rows, heads}) ||
       !shape(input->inputTensors[1], DATA_I32, {rows}) || !shape(input->inputTensors[2], DATA_I32, {3}) ||
-      !shape(input->outputTensors[0], DATA_BF16, {keys, rows, heads}) ||
-      !shape(input->outputTensors[1], DATA_F32, {64, rows, heads}) ||
-      !shape(input->outputTensors[2], DATA_F32, {64, rows, heads}))
+      !shape(input->outputTensors[0], DATA_BF16, {keys, rows, heads}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  const bool expanded_stats =
+      shape(input->outputTensors[1], DATA_F32, {64, rows, heads}) &&
+      shape(input->outputTensors[2], DATA_F32, {64, rows, heads});
+  const bool packed_stats =
+      shape(input->outputTensors[1], DATA_F32, {stat_rows, heads}) &&
+      shape(input->outputTensors[2], DATA_F32, {stat_rows, heads});
+  if (!expanded_stats && !packed_stats) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  const unsigned long block_rows = (packed_stats && (rows % 64 != 0)) ? 64UL : 16UL;
+  const unsigned long row_blocks = packed_stats ? (stat_rows / block_rows) : ((rows + block_rows - 1) / block_rows);
   output->indexSpaceRank = 3;
   output->indexSpaceGeometry[0] = heads;
-  output->indexSpaceGeometry[1] = rows;
+  output->indexSpaceGeometry[1] = row_blocks;
   output->indexSpaceGeometry[2] = 1;
   for (unsigned i : {0u, 1u}) {
     auto& access = i ? output->outputTensorAccessPattern[0] : output->inputTensorAccessPattern[0];
     mapped(access, 0, 2, keys - 1, 0);
-    mapped(access, 1, 1, 0, 1);
+    mapped(access, 1, 1, block_rows - 1, block_rows);
     mapped(access, 2, 0, 0, 1);
   }
   output->inputTensorAccessPattern[1].allRequired = 1;
   output->inputTensorAccessPattern[2].allRequired = 1;
   for (unsigned i : {1u, 2u}) {
     auto& access = output->outputTensorAccessPattern[i];
-    mapped(access, 0, 2, 63, 0);
-    mapped(access, 1, 1, 0, 1);
-    mapped(access, 2, 0, 0, 1);
+    if (packed_stats) {
+      mapped(access, 0, 1, block_rows - 1, block_rows);
+      mapped(access, 1, 0, 0, 1);
+    } else {
+      mapped(access, 0, 2, 63, 0);
+      mapped(access, 1, 1, block_rows - 1, block_rows);
+      mapped(access, 2, 0, 0, 1);
+    }
   }
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
+  struct SoftmaxScalarParams {
+    float scale;
+    int32_t block_rows;
+  } params{scale, static_cast<int32_t>(block_rows)};
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
+  if (packed_stats)
+    return binary(output, &_binary_attn_tile_softmax_packed_bf16_o_start,
+                  &_binary_attn_tile_softmax_packed_bf16_o_end);
   return binary(output, &_binary_attn_tile_softmax_bf16_o_start, &_binary_attn_tile_softmax_bf16_o_end);
 }
 
