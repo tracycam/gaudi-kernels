@@ -172,29 +172,24 @@ int main(int argc, char** argv) {
           throw std::runtime_error(std::string("FP8 hybrid ELF rejected: ") + guid);
       };
 
-      Tensor t_in{}, t_rscale{}, t_a1k{}, t_a2k{}, t_w{}, t_ws{}, t_bscale{}, t_w1k{}, t_w2k{};
-      Tensor t_c0{}, t_c1{}, t_bias{}, t_out{};
+      Tensor t_in{}, t_a1k{}, t_w{}, t_ws{}, t_w1k{};
+      Tensor t_c0{}, t_cp{}, t_bias{}, t_out{};
       shape(t_in, DATA_BF16, {256, rows});
-      shape(t_rscale, DATA_F32, {1, rows});
       shape(t_a1k, DATA_BF16, {256, rows});
-      shape(t_a2k, DATA_F8_143, {512, rows});
       shape(t_w, DATA_F8_143, {128, 512, 3});
       shape(t_ws, DATA_F32, {3, 4});
-      shape(t_bscale, DATA_F32, {1, 4});
       shape(t_w1k, DATA_BF16, {384, 512});
-      shape(t_w2k, DATA_F8_143, {768, 512});
       shape(t_c0, DATA_F32, {512, rows});
-      shape(t_c1, DATA_F32, {512, rows});
+      shape(t_cp, DATA_F32, {512, rows});
       shape(t_bias, DATA_F32, {512});
       shape(t_out, DATA_BF16, {512, rows});
 
-      check_multi("gk_fp8_act_row_scale_f32_v1", {t_in}, {t_rscale}, 2, (rows + 15) / 16);
-      check_multi("gk_fp8_quant_act_hybrid_v1", {t_in, t_rscale}, {t_a1k, t_a2k}, 3, 1);
+      check_multi("gk_fp8_quant_act_bf16_1k_v1", {t_in}, {t_a1k}, 3, 1);
+      check_multi("gk_fp8_quant_act_bf16_k32_v1", {t_in}, {t_a1k}, 3, 1);
       check_multi("gk_fp8_dequant_weight_bf16_1k_v1", {t_w, t_ws}, {t_w1k}, 3, 3);
-      check_multi("gk_fp8_weight_blk_scale_f32_v1", {t_ws}, {t_bscale}, 2, 1);
-      check_multi("gk_fp8_dequant_weight_fp8_2k_v1", {t_w, t_ws, t_bscale}, {t_w2k}, 3, 3);
-      check_multi("gk_fp8_hybrid_epilogue_bf16_v1", {t_c0, t_c1, t_rscale, t_bscale}, {t_out}, 3, 1);
-      check_multi("gk_fp8_hybrid_epilogue_bias_bf16_v1", {t_c0, t_c1, t_rscale, t_bscale, t_bias}, {t_out}, 3, 1);
+      check_multi("gk_fp8_dequant_weight_bf16_k32_v1", {t_w, t_ws}, {t_w1k}, 3, 3);
+      check_multi("gk_fp8_epilogue_k32_bf16_v1", {t_c0, t_cp}, {t_out}, 3, 1);
+      check_multi("gk_fp8_epilogue_k32_bias_bf16_v1", {t_c0, t_cp, t_bias}, {t_out}, 3, 1);
     }
     dlclose(library);
     std::cout << "FP8 Glue geometry, unique axes, ELF and invalid inputs passed\n";

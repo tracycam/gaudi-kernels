@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Decode prepared 128x128 block-FP8 weights and doubled FP32 scales into 1K BF16 main component.
+// Dedicated 1-output 128x128 block-FP8 weight dequant producer for SRAM-bundled BF16 GEMM
+// (w0 when KARATSUBA_32 is unset, w0 + 32 * (w_deq - w0) when set).
 void main(tensor input, tensor scales, tensor output) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   for (int group = begin[0]; group < end[0]; ++group) {
@@ -15,8 +16,15 @@ void main(tensor input, tensor scales, tensor output) {
         float128 wide = v_convert_bf16_to_f32_all_b(v_convert_f8_to_bf16_b(packed));
         wide.v1 *= scale;
         wide.v2 *= scale;
+        bfloat128 h = convert_float128_to_bfloat128(wide, SW_RHNE);
+#ifdef KARATSUBA_32
+        float128 hw = v_convert_bf16_to_f32_all_b(h);
+        float128 wp = {v_f32_mac_b(wide.v1 - hw.v1, 32.0f, hw.v1),
+                       v_f32_mac_b(wide.v2 - hw.v2, 32.0f, hw.v2)};
+        h = convert_float128_to_bfloat128(wp, SW_RHNE);
+#endif
         int5 dst = {base, row, 0, 0, 0};
-        v_bf16_st_tnsr(dst, output, convert_float128_to_bfloat128(wide, SW_RHNE));
+        v_bf16_st_tnsr(dst, output, h);
       }
     }
   }

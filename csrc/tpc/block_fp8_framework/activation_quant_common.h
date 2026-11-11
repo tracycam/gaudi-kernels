@@ -1,4 +1,5 @@
-// OCP E4M3FN activation quantization followed by Gaudi2 half-range encoding.
+// OCP E4M3FN activation quantization helpers (half-range encoding for 1-byte MME
+// and direct FP32 dequantization for SRAM-bundled BF16 Karatsuba MME).
 static inline float64 fp8_activation_scale(float64 maximum) {
  float64 scale=maximum*(1.0f/448.0f);
  float64 residual=v_f32_mac_b(-scale,448.0f,maximum);
@@ -28,22 +29,31 @@ static inline minifloat256 fp8_pack_half(float128 x, float64 scale, float64 reci
  return v_f8_mov_dual_group_pack_b(packed,SW_PACK21,(minifloat256)0);
 }
 
-// Pack 128 scaled FP32 values (in native all_b even/odd BF16 lane order) into Gaudi2
-// FP8_143 (expBias=7) clamped to [-224, 224] without SW_LINEAR lane-unpack shuffles.
-static inline minifloat256 fp8_143_pack_all_clamped(float128 x) {
- float64 c0=v_f32_min_b(v_f32_max_b(x.v1,-224.0f),224.0f);
- float64 c1=v_f32_min_b(v_f32_max_b(x.v2,-224.0f),224.0f);
- minifloat256 sparse=(minifloat256)0;
- sparse=v_convert_f32_to_f8_b(c0,0,SW_RHNE|SW_CLIP_FP,sparse);
- sparse=v_convert_f32_to_f8_b(c1,2,SW_RHNE|SW_CLIP_FP,sparse);
- minifloat256 packed=v_f8_pack_b(sparse,SW_GROUP_0|SW_STRIDE_2,(minifloat256)0);
- packed=v_f8_pack_b(sparse,SW_GROUP_1|SW_STRIDE_2,packed);
- return v_f8_mov_dual_group_pack_b(packed,SW_PACK21,(minifloat256)0);
+// Positive FP32 reciprocal with conditional subnormal/near-subnormal prescaling
+// (< 1e-30f) and two FMA Newton-Raphson steps, avoiding both subnormal reciprocal
+// underflow on tiny positive scales and overflow on large scales.
+static inline float64 fp8_exact_positive_rcp(float64 s) {
+ float64 up=v_f32_sel_less_f32_b(s,1.0e-30f,16777216.0f,1.0f);
+ float64 s_s=s*up;
+ float64 r=v_reciprocal_fast_f32(s_s);
+ r=v_f32_mac_b(v_f32_mac_b(-s_s,r,1.0f),r,r);
+ r=v_f32_mac_b(v_f32_mac_b(-s_s,r,1.0f),r,r);
+ return r*up;
 }
 
-// Pack two adjacent 128-element clamped FP8_143 vectors (all_b lane order) into one 256-byte vector.
-static inline minifloat256 fp8_143_pack256_all_clamped(float128 lo, float128 hi) {
- minifloat256 p0=fp8_143_pack_all_clamped(lo);
- minifloat256 p1=fp8_143_pack_all_clamped(hi);
- return (minifloat256)v_f32_mov_dual_group_all_b((float64)p1,0xffffffff,0,1,0,1,MkWrA(0,0,3,3),(float64)p0);
+// Exact OCP E4M3FN round-to-nearest-even and FP32 dequantization in native BF16
+// even/odd lane order (preserving full 2^-9 subnormal grid without half-range FTZ).
+static inline float64 fp8_ocp_dequant_vec(float64 x, float64 scale, float64 reciprocal) {
+ float64 q=x*reciprocal;
+ float64 residual=v_f32_mac_b(-q,scale,x);
+ float64 z=v_f32_mac_b(residual,reciprocal,q);
+ float64 magnitude=(float64)((uint64)z & 0x7fffffffu);
+ magnitude=v_f32_min_b(magnitude,448.0f);
+ uint64 bits=(uint64)magnitude;
+ uint64 rounded=(bits+0x7ffffu+((bits>>20)&1u)) & 0xfff00000u;
+ float64 normal=(float64)rounded;
+ float64 subnormal=v_f32_sub_b(v_f32_add_b(magnitude,16384.0f),16384.0f);
+ float64 value=v_f32_sel_less_f32_b(magnitude,0.015625f,subnormal,normal);
+ float64 signed_val=(float64)((uint64)value | ((uint64)x & 0x80000000u));
+ return signed_val*scale;
 }

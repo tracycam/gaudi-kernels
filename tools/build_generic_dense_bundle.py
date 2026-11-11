@@ -66,18 +66,19 @@ def main():
                          ("fp8_block_reduce", "block_fp8_framework/reduce_bias.c"),
                          ("fp8_token_quant", "block_fp8_framework/activation_token.c"),
                          ("fp8_channel_finish", "block_fp8_framework/channel_finish.c"),
-                         ("fp8_act_row_scale", "block_fp8_framework/act_row_scale_f32.c"),
-                         ("fp8_quant_act_hybrid", "block_fp8_framework/quant_act_hybrid.c"),
+                         ("fp8_quant_act_1k", "block_fp8_framework/quant_act_bf16_1k.c"),
+                         ("fp8_quant_act_k32", "block_fp8_framework/quant_act_bf16_1k.c"),
                          ("fp8_dequant_weight_1k", "block_fp8_framework/dequant_weight_bf16_1k.c"),
-                         ("fp8_weight_blk_scale", "block_fp8_framework/weight_blk_scale_f32.c"),
-                         ("fp8_dequant_weight_2k", "block_fp8_framework/dequant_weight_fp8_2k.c"),
-                         ("fp8_hybrid_epilogue", "block_fp8_framework/hybrid_epilogue_bf16.c"),
-                         ("fp8_hybrid_epilogue_bias", "block_fp8_framework/hybrid_epilogue_bias_bf16.c")):
+                         ("fp8_dequant_weight_k32", "block_fp8_framework/dequant_weight_bf16_1k.c"),
+                         ("fp8_epilogue_k32", "block_fp8_framework/epilogue_k32_bf16.c"),
+                         ("fp8_epilogue_k32_bias", "block_fp8_framework/epilogue_k32_bias_bf16.c")):
         flags = []
         if name == "fp8_block_reduce":
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
         elif name == "attn_tile_softmax_packed_bf16":
             flags = ["-DPACKED_STATS=1"]
+        elif name in ("fp8_quant_act_k32", "fp8_dequant_weight_k32"):
+            flags = ["-DKARATSUBA_32=1"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
@@ -92,15 +93,12 @@ def main():
             "fp8_token_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_channel_finish": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                    b"tensor bias", b"tensor output"],
-            "fp8_act_row_scale": [b"tensor input", b"tensor row_scale"],
-            "fp8_quant_act_hybrid": [b"tensor input", b"tensor row_scale", b"tensor out_1k", b"tensor out_2k"],
+            "fp8_quant_act_1k": [b"tensor input", b"tensor output"],
+            "fp8_quant_act_k32": [b"tensor input", b"tensor output"],
             "fp8_dequant_weight_1k": [b"tensor input", b"tensor scales", b"tensor output"],
-            "fp8_weight_blk_scale": [b"tensor scales", b"tensor blk_scale"],
-            "fp8_dequant_weight_2k": [b"tensor input", b"tensor scales", b"tensor blk_scale", b"tensor output"],
-            "fp8_hybrid_epilogue": [b"tensor c0", b"tensor c1", b"tensor row_scale",
-                                    b"tensor blk_scale", b"tensor output"],
-            "fp8_hybrid_epilogue_bias": [b"tensor c0", b"tensor c1", b"tensor row_scale",
-                                         b"tensor blk_scale", b"tensor bias", b"tensor output"],
+            "fp8_dequant_weight_k32": [b"tensor input", b"tensor scales", b"tensor output"],
+            "fp8_epilogue_k32": [b"tensor c0", b"tensor cp", b"tensor output"],
+            "fp8_epilogue_k32_bias": [b"tensor c0", b"tensor cp", b"tensor bias", b"tensor output"],
         }
         if name in contracts:
             verify_tpc_abi(out / f"{name}.o", root / f"csrc/tpc/{source}", contracts[name])

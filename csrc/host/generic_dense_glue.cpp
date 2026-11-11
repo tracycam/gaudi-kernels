@@ -64,13 +64,12 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_fp8::kReduce) == 0) return 31;
   if (std::strcmp(name, generic_fp8::kTokenQuant) == 0) return 32;
   if (std::strcmp(name, generic_fp8::kChannelFinish) == 0) return 33;
-  if (std::strcmp(name, generic_fp8::kActRowScale) == 0) return 35;
-  if (std::strcmp(name, generic_fp8::kQuantActHybrid) == 0) return 36;
+  if (std::strcmp(name, generic_fp8::kQuantAct1k) == 0) return 35;
+  if (std::strcmp(name, generic_fp8::kQuantActK32) == 0) return 36;
   if (std::strcmp(name, generic_fp8::kDequantWeight1k) == 0) return 37;
-  if (std::strcmp(name, generic_fp8::kWeightBlkScale) == 0) return 38;
-  if (std::strcmp(name, generic_fp8::kDequantWeight2k) == 0) return 39;
-  if (std::strcmp(name, generic_fp8::kHybridEpilogue) == 0) return 40;
-  if (std::strcmp(name, generic_fp8::kHybridEpilogueBias) == 0) return 41;
+  if (std::strcmp(name, generic_fp8::kDequantWeightK32) == 0) return 38;
+  if (std::strcmp(name, generic_fp8::kEpilogueK32) == 0) return 39;
+  if (std::strcmp(name, generic_fp8::kEpilogueK32Bias) == 0) return 40;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
@@ -565,7 +564,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 37 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 36 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -606,13 +605,12 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 27) std::strcpy(guids[27].name, generic_fp8::kReduce);
   if (guids && *count && capacity > 28) std::strcpy(guids[28].name, generic_fp8::kTokenQuant);
   if (guids && *count && capacity > 29) std::strcpy(guids[29].name, generic_fp8::kChannelFinish);
-  if (guids && *count && capacity > 30) std::strcpy(guids[30].name, generic_fp8::kActRowScale);
-  if (guids && *count && capacity > 31) std::strcpy(guids[31].name, generic_fp8::kQuantActHybrid);
+  if (guids && *count && capacity > 30) std::strcpy(guids[30].name, generic_fp8::kQuantAct1k);
+  if (guids && *count && capacity > 31) std::strcpy(guids[31].name, generic_fp8::kQuantActK32);
   if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kDequantWeight1k);
-  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kWeightBlkScale);
-  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kDequantWeight2k);
-  if (guids && *count && capacity > 35) std::strcpy(guids[35].name, generic_fp8::kHybridEpilogue);
-  if (guids && *count && capacity > 36) std::strcpy(guids[36].name, generic_fp8::kHybridEpilogueBias);
+  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kDequantWeightK32);
+  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kEpilogueK32);
+  if (guids && *count && capacity > 35) std::strcpy(guids[35].name, generic_fp8::kEpilogueK32Bias);
   return GLUE_SUCCESS;
 }
 
@@ -641,12 +639,9 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 31) return generic_fp8::instantiate_reduce(input, output);
   if (id == 32) return generic_fp8::instantiate_token_quant(input, output);
   if (id == 33) return generic_fp8::instantiate_channel_finish(input, output);
-  if (id == 35) return generic_fp8::instantiate_act_row_scale(input, output);
-  if (id == 36) return generic_fp8::instantiate_quant_act_hybrid(input, output);
-  if (id == 37) return generic_fp8::instantiate_dequant_weight_1k(input, output);
-  if (id == 38) return generic_fp8::instantiate_weight_blk_scale(input, output);
-  if (id == 39) return generic_fp8::instantiate_dequant_weight_2k(input, output);
-  if (id == 40 || id == 41) return generic_fp8::instantiate_hybrid_epilogue(input, output, id == 41);
+  if (id == 35 || id == 36) return generic_fp8::instantiate_quant_act_bf16(input, output, id == 36);
+  if (id == 37 || id == 38) return generic_fp8::instantiate_dequant_weight_bf16(input, output, id == 38);
+  if (id == 39 || id == 40) return generic_fp8::instantiate_epilogue_k32(input, output, id == 40);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
