@@ -147,12 +147,22 @@ inline GlueCodeReturn instantiate_reduce(HabanaKernelParams* input, HabanaKernel
   return generic_attention::binary(output, &_binary_fp8_block_reduce_o_start, &_binary_fp8_block_reduce_o_end);
 }
 
+inline GlueCodeReturn parse_tile_tag(const HabanaKernelParams* input, int32_t& tile_tag) {
+  tile_tag = 0;
+  if (input->nodeParams.nodeParamsSize == 0) return GLUE_SUCCESS;
+  if (input->nodeParams.nodeParamsSize != sizeof(int32_t) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&tile_tag, input->nodeParams.nodeParams, sizeof(int32_t));
+  return tile_tag >= 0 ? GLUE_SUCCESS : GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+}
+
 inline GlueCodeReturn instantiate_quant_act_bf16(HabanaKernelParams* input,
                                                  HabanaKernelInstantiation* output,
                                                  bool k32) {
   if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  int32_t tile_tag = 0;
+  if (auto rc = parse_tile_tag(input, tile_tag); rc != GLUE_SUCCESS) return rc;
   const auto& x = input->inputTensors[0].geometry;
   const auto width = x.maxSizes[0], rows = x.maxSizes[1];
   if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
@@ -171,7 +181,8 @@ inline GlueCodeReturn instantiate_quant_act_bf16(HabanaKernelParams* input,
   generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, kRowTile - 1, kRowTile);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, kColTile - 1, kColTile);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, kRowTile - 1, kRowTile);
-  output->kernel.paramsNr = 0;
+  output->kernel.paramsNr = 1;
+  std::memcpy(output->kernel.scalarParams, &tile_tag, sizeof(tile_tag));
   return k32 ? generic_attention::binary(output, &_binary_fp8_quant_act_k32_o_start,
                                          &_binary_fp8_quant_act_k32_o_end)
              : generic_attention::binary(output, &_binary_fp8_quant_act_1k_o_start,
@@ -183,7 +194,8 @@ inline GlueCodeReturn instantiate_dequant_weight_bf16(HabanaKernelParams* input,
                                                       bool k32) {
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  int32_t tile_tag = 0;
+  if (auto rc = parse_tile_tag(input, tile_tag); rc != GLUE_SUCCESS) return rc;
   const auto& w = input->inputTensors[0].geometry;
   const auto width = w.maxSizes[1], groups = w.maxSizes[2];
   if (!width || width > INT_MAX - 128 || width % 128 || !groups || groups > INT_MAX / 128 ||
@@ -202,7 +214,8 @@ inline GlueCodeReturn instantiate_dequant_weight_bf16(HabanaKernelParams* input,
   generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, 0, 1);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, 127, 128);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, 127, 128);
-  output->kernel.paramsNr = 0;
+  output->kernel.paramsNr = 1;
+  std::memcpy(output->kernel.scalarParams, &tile_tag, sizeof(tile_tag));
   return k32 ? generic_attention::binary(output, &_binary_fp8_dequant_weight_k32_o_start,
                                          &_binary_fp8_dequant_weight_k32_o_end)
              : generic_attention::binary(output, &_binary_fp8_dequant_weight_1k_o_start,

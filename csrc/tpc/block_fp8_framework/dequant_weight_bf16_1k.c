@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dedicated 1-output 128x128 block-FP8 weight dequant producer for SRAM-bundled BF16 GEMM
 // (w0 when KARATSUBA_32 is unset, w0 + 32 * (w_deq - w0) when set).
-void main(tensor input, tensor scales, tensor output) {
+void main(tensor input, tensor scales, tensor output, int tile_tag) {
+  if (tile_tag < 0) return;
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   for (int group = begin[0]; group < end[0]; ++group) {
     int base = group * 128;

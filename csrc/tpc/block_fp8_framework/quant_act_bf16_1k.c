@@ -17,7 +17,8 @@ static inline void emit_act_vec(tensor output, float128 x, float64 scale, float6
   v_bf16_st_tnsr(dst, output, h);
 }
 
-void main(tensor input, tensor output) {
+void main(tensor input, tensor output, int tile_tag) {
+  if (tile_tag < 0) return;
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   int groups = get_dim_size(input, 0) / 128;
   int rows = get_dim_size(input, 1);
