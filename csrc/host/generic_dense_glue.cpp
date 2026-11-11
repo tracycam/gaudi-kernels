@@ -66,15 +66,17 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_fp8::kChannelFinish) == 0) return 33;
   if (std::strcmp(name, generic_fp8::kActRowScale) == 0) return 34;
   if (std::strcmp(name, generic_fp8::kWeightBlkScale) == 0) return 35;
+  if (std::strcmp(name, generic_fp8::kPrequantAct) == 0) return 42;
   if (std::strcmp(name, generic_fp8::kQuantAct1k) == 0) return 36;
-  if (std::strcmp(name, generic_fp8::kQuantAct2k) == 0) return 37;
+  if (std::strcmp(name, generic_fp8::kQuantAct3k) == 0) return 37;
   if (std::strcmp(name, generic_fp8::kDequantWeight1k) == 0) return 38;
-  if (std::strcmp(name, generic_fp8::kDequantWeight2k) == 0) return 39;
+  if (std::strcmp(name, generic_fp8::kDequantWeight3k) == 0) return 39;
   if (std::strcmp(name, generic_fp8::kHybridEpilogue) == 0) return 40;
   if (std::strcmp(name, generic_fp8::kHybridEpilogueBias) == 0) return 41;
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
+  if (std::strcmp(name, generic_attention::kOnlineInit) == 0) return 43;
   if (std::strcmp(name, generic_attention::kMerge) == 0) return 17;
   if (std::strcmp(name, generic_attention::kFinalize) == 0) return 18;
   if (std::strcmp(name, generic_attention::kHeadStore) == 0) return 19;
@@ -566,7 +568,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 38 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 40 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -609,12 +611,14 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 29) std::strcpy(guids[29].name, generic_fp8::kChannelFinish);
   if (guids && *count && capacity > 30) std::strcpy(guids[30].name, generic_fp8::kActRowScale);
   if (guids && *count && capacity > 31) std::strcpy(guids[31].name, generic_fp8::kWeightBlkScale);
-  if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kQuantAct1k);
-  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kQuantAct2k);
-  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kDequantWeight1k);
-  if (guids && *count && capacity > 35) std::strcpy(guids[35].name, generic_fp8::kDequantWeight2k);
-  if (guids && *count && capacity > 36) std::strcpy(guids[36].name, generic_fp8::kHybridEpilogue);
-  if (guids && *count && capacity > 37) std::strcpy(guids[37].name, generic_fp8::kHybridEpilogueBias);
+  if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kPrequantAct);
+  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kQuantAct1k);
+  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kQuantAct3k);
+  if (guids && *count && capacity > 35) std::strcpy(guids[35].name, generic_fp8::kDequantWeight1k);
+  if (guids && *count && capacity > 36) std::strcpy(guids[36].name, generic_fp8::kDequantWeight3k);
+  if (guids && *count && capacity > 37) std::strcpy(guids[37].name, generic_fp8::kHybridEpilogue);
+  if (guids && *count && capacity > 38) std::strcpy(guids[38].name, generic_fp8::kHybridEpilogueBias);
+  if (guids && *count && capacity > 39) std::strcpy(guids[39].name, generic_attention::kOnlineInit);
   return GLUE_SUCCESS;
 }
 
@@ -631,7 +635,8 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 9) return instantiate_cast_f32_to_bf16(input, output);
   if (id == 10) return instantiate_index_put_i64(input, output);
   if (id == 16) return generic_attention::instantiate_softmax(input, output);
-  if (id == 17 || id == 18) return generic_attention::instantiate_online(input, output, id == 17);
+  if (id == 17 || id == 18 || id == 43)
+    return generic_attention::instantiate_online(input, output, id == 17 ? 1 : (id == 43 ? 2 : 0));
   if (id == 19) return generic_attention::instantiate_head_store(input, output);
   if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
@@ -645,6 +650,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 33) return generic_fp8::instantiate_channel_finish(input, output);
   if (id == 34) return generic_fp8::instantiate_act_row_scale(input, output);
   if (id == 35) return generic_fp8::instantiate_weight_blk_scale(input, output);
+  if (id == 42) return generic_fp8::instantiate_prequant_act(input, output);
   if (id == 36 || id == 37) return generic_fp8::instantiate_quant_act_hybrid(input, output, id == 37);
   if (id == 38 || id == 39) return generic_fp8::instantiate_dequant_weight_hybrid(input, output, id == 39);
   if (id == 40 || id == 41) return generic_fp8::instantiate_hybrid_epilogue(input, output, id == 41);

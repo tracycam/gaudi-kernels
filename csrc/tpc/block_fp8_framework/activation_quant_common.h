@@ -1,5 +1,5 @@
 // OCP E4M3FN activation quantization helpers (half-range encoding for 1-byte MME
-// and direct FP32 dequantization for SRAM-bundled 1K FP16 + 2K FP8_143 hybrid MME).
+// and direct FP32 dequantization for SRAM-bundled 1K FP16 + 3K FP8_143 hybrid MME).
 static inline float64 fp8_activation_scale(float64 maximum) {
  float64 scale=maximum*(1.0f/448.0f);
  float64 residual=v_f32_mac_b(-scale,448.0f,maximum);

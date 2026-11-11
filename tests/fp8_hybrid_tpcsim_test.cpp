@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Habana Gaudi2 TPC Simulator verification for 1K FP16 + 2K FP8_143 hybrid prefill kernels:
+// Habana Gaudi2 TPC Simulator verification for 1K FP16 + 3K FP8_143 hybrid prefill kernels:
 // - gk_fp8_act_row_scale_f32_v1 & gk_fp8_weight_blk_scale_f32_v1
-// - gk_fp8_quant_act_fp16_1k_v1 & gk_fp8_quant_act_fp8_2k_v1
+// - gk_fp8_prequant_act_bf16_v1 -> gk_fp8_quant_act_fp16_1k_v1 & gk_fp8_quant_act_fp8_3k_v1
 //   (including all-zero group and P-NUM-41 tiny-positive 1e-15/1e-12 groups + 2^-9 subnormals)
-// - gk_fp8_dequant_weight_fp16_1k_v1 & gk_fp8_dequant_weight_fp8_2k_v1
+// - gk_fp8_dequant_weight_fp16_1k_v1 & gk_fp8_dequant_weight_fp8_3k_v1
 // - gk_fp8_hybrid_epilogue_bf16_v1 & gk_fp8_hybrid_epilogue_bias_bf16_v1
-// - End-to-end 1K FP16 + 2K FP8_143 (with Gaudi2 MME FP8 subnormal FTZ) vs independent FP64
+// - End-to-end 1K FP16 + 3K FP8_143 (with Gaudi2 MME FP8 subnormal FTZ) vs independent FP64
 //   original OCP W8A8 reference on high-cancellation K=7168, K=384 (odd group tail + bias),
 //   K=22016, and tiny-scale matrices (<= 0.0005 << 0.003 gate).
 #include <VPEStats.h>
@@ -254,27 +254,42 @@ void run_hybrid_gemm_case(const Provider& provider, uint64_t m, uint64_t n,
                  d, &tag0);
   }
 
-  std::vector<uint16_t> act_1k(m * k, 0x7e00U);
-  std::vector<uint8_t> act_2k(m * k * 2, 0x7fU);
+  const uint64_t pairs = (groups + 1) / 2;
+  const uint64_t k_3k = pairs * 768;
+  std::vector<uint16_t> q_act(m * groups * 128, 0x7fc0U);
+  std::vector<float> s_norm(m * groups, -1.0f);
   {
     std::vector<tpc_tests::TensorDesc2> d{make_desc(x.data(), DATA_BF16, {k, m}),
                                           make_desc(row_scale.data(), DATA_F32, {1, m}),
+                                          make_desc(q_act.data(), DATA_BF16, {128, m, groups}),
+                                          make_desc(s_norm.data(), DATA_F32, {1, m, groups})};
+    provider.run("gk_fp8_prequant_act_bf16_v1",
+                 {make_tensor(DATA_BF16, {k, m}), make_tensor(DATA_F32, {1, m})},
+                 {make_tensor(DATA_BF16, {128, m, groups}), make_tensor(DATA_F32, {1, m, groups})},
+                 d, &tag0);
+  }
+
+  std::vector<uint16_t> act_1k(m * k, 0x7e00U);
+  std::vector<uint8_t> act_3k(m * k_3k, 0x7fU);
+  {
+    std::vector<tpc_tests::TensorDesc2> d{make_desc(q_act.data(), DATA_BF16, {128, m, groups}),
+                                          make_desc(s_norm.data(), DATA_F32, {1, m, groups}),
                                           make_desc(act_1k.data(), DATA_F16, {k, m})};
     provider.run("gk_fp8_quant_act_fp16_1k_v1",
-                 {make_tensor(DATA_BF16, {k, m}), make_tensor(DATA_F32, {1, m})},
+                 {make_tensor(DATA_BF16, {128, m, groups}), make_tensor(DATA_F32, {1, m, groups})},
                  {make_tensor(DATA_F16, {k, m})}, d, &tag0);
   }
   {
-    std::vector<tpc_tests::TensorDesc2> d{make_desc(x.data(), DATA_BF16, {k, m}),
-                                          make_desc(row_scale.data(), DATA_F32, {1, m}),
-                                          make_desc(act_2k.data(), DATA_F8_143, {k * 2, m})};
-    provider.run("gk_fp8_quant_act_fp8_2k_v1",
-                 {make_tensor(DATA_BF16, {k, m}), make_tensor(DATA_F32, {1, m})},
-                 {make_tensor(DATA_F8_143, {k * 2, m})}, d, &tag1);
+    std::vector<tpc_tests::TensorDesc2> d{make_desc(q_act.data(), DATA_BF16, {128, m, groups}),
+                                          make_desc(s_norm.data(), DATA_F32, {1, m, groups}),
+                                          make_desc(act_3k.data(), DATA_F8_143, {k_3k, m})};
+    provider.run("gk_fp8_quant_act_fp8_3k_v1",
+                 {make_tensor(DATA_BF16, {128, m, groups}), make_tensor(DATA_F32, {1, m, groups})},
+                 {make_tensor(DATA_F8_143, {k_3k, m})}, d, &tag1);
   }
 
   std::vector<uint16_t> w_1k(n * k, 0x7e00U);
-  std::vector<uint8_t> w_2k(n * k * 2, 0x7fU);
+  std::vector<uint8_t> w_3k(n * k_3k, 0x7fU);
   {
     std::vector<tpc_tests::TensorDesc2> d{make_desc(w_prep.data(), DATA_F8_143, {128, n, groups}),
                                           make_desc(prep_scales.data(), DATA_F32, {groups, blocks}),
@@ -290,12 +305,12 @@ void run_hybrid_gemm_case(const Provider& provider, uint64_t m, uint64_t n,
     std::vector<tpc_tests::TensorDesc2> d{make_desc(w_prep.data(), DATA_F8_143, {128, n, groups}),
                                           make_desc(prep_scales.data(), DATA_F32, {groups, blocks}),
                                           make_desc(blk_scale.data(), DATA_F32, {1, blocks}),
-                                          make_desc(w_2k.data(), DATA_F8_143, {k * 2, n})};
-    provider.run("gk_fp8_dequant_weight_fp8_2k_v1",
+                                          make_desc(w_3k.data(), DATA_F8_143, {k_3k, n})};
+    provider.run("gk_fp8_dequant_weight_fp8_3k_v1",
                  {make_tensor(DATA_F8_143, {128, n, groups}),
                   make_tensor(DATA_F32, {groups, blocks}),
                   make_tensor(DATA_F32, {1, blocks})},
-                 {make_tensor(DATA_F8_143, {k * 2, n})}, d, &tag1);
+                 {make_tensor(DATA_F8_143, {k_3k, n})}, d, &tag1);
   }
 
   std::vector<float> c0(m * n, 0.0f), c1(m * n, 0.0f);
@@ -305,9 +320,9 @@ void run_hybrid_gemm_case(const Provider& provider, uint64_t m, uint64_t n,
       for (uint64_t inner = 0; inner < k; ++inner) {
         s0 += widen_fp16(act_1k[r * k + inner]) * widen_fp16(w_1k[col * k + inner]);
       }
-      for (uint64_t inner = 0; inner < k * 2; ++inner) {
-        s1 += decode_gaudi2_mme_fp8_143(act_2k[r * k * 2 + inner]) *
-              decode_gaudi2_mme_fp8_143(w_2k[col * k * 2 + inner]);
+      for (uint64_t inner = 0; inner < k_3k; ++inner) {
+        s1 += decode_gaudi2_mme_fp8_143(act_3k[r * k_3k + inner]) *
+              decode_gaudi2_mme_fp8_143(w_3k[col * k_3k + inner]);
       }
       c0[r * n + col] = s0;
       c1[r * n + col] = s1;
@@ -398,13 +413,13 @@ void run_hybrid_gemm_case(const Provider& provider, uint64_t m, uint64_t n,
     max_rel_1k = std::max(max_rel_1k, std::sqrt(err_1k / ref_sq));
     max_rel_f32 = std::max(max_rel_f32, std::sqrt(err_f32 / ref_f64_sq));
   }
-  std::cout << "[PASS] 1K FP16 + 2K FP8_143 tpcsim (M=" << m << ", N=" << n << ", K=" << k
+  std::cout << "[PASS] 1K FP16 + 3K FP8_143 tpcsim (M=" << m << ", N=" << n << ", K=" << k
             << ", bias=" << with_bias << ", tiny=" << tiny_only
             << "): pre_bf16_f32_rel_l2=" << max_rel_f32
             << ", 1K_FP16_bf16_rel_l2=" << max_rel_1k
             << " -> hybrid_bf16_rel_l2=" << max_rel_hybrid << '\n';
   if (!(max_rel_f32 <= 1.0e-4 && max_rel_hybrid <= 0.001))
-    throw std::runtime_error("1K FP16 + 2K FP8_143 exceeded simulator accuracy gates");
+    throw std::runtime_error("1K FP16 + 3K FP8_143 exceeded simulator accuracy gates");
 }
 
 }  // namespace

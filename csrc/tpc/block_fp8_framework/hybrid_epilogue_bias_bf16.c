@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Combine FP32 normalized 1K FP16 GEMM (c0), 2K FP8_143 cross-residual GEMM (c1),
+// Combine FP32 normalized 1K FP16 GEMM (c0), 3K FP8_143 cross-residual GEMM (c1),
 // and FP32 bias via ((c0 + 4 * c1) * row_scale) * blk_scale + bias into BF16.
 void main(tensor c0, tensor c1, tensor row_scale, tensor blk_scale, tensor bias, tensor output) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();

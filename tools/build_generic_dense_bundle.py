@@ -56,6 +56,7 @@ def main():
                          ("attn_tile_indices_i32", "generic_dense/attn_tile_indices_i32.c"),
                          ("attn_decode_exp_f32", "generic_dense/attn_decode_exp_f32.c"),
                          ("attn_decode_normalize_bf16", "generic_dense/attn_decode_normalize_bf16.c"),
+                         ("attn_online_init_f32", "generic_dense/attn_online_init_f32.c"),
                          ("attn_online_merge_f32", "generic_dense/attn_online_merge_f32.c"),
                          ("attn_online_finalize_bf16", "generic_dense/attn_online_finalize_bf16.c"),
                          ("index_put_i64", "generic_dense/index_put_i64.c"),
@@ -68,10 +69,11 @@ def main():
                          ("fp8_channel_finish", "block_fp8_framework/channel_finish.c"),
                          ("fp8_act_row_scale", "block_fp8_framework/act_row_scale_f32.c"),
                          ("fp8_weight_blk_scale", "block_fp8_framework/weight_blk_scale_f32.c"),
+                         ("fp8_prequant_act", "block_fp8_framework/prequant_act_bf16.c"),
                          ("fp8_quant_act_1k", "block_fp8_framework/quant_act_fp16_1k.c"),
-                         ("fp8_quant_act_2k", "block_fp8_framework/quant_act_fp16_1k.c"),
+                         ("fp8_quant_act_3k", "block_fp8_framework/quant_act_fp16_1k.c"),
                          ("fp8_dequant_weight_1k", "block_fp8_framework/dequant_weight_fp16_1k.c"),
-                         ("fp8_dequant_weight_2k", "block_fp8_framework/dequant_weight_fp16_1k.c"),
+                         ("fp8_dequant_weight_3k", "block_fp8_framework/dequant_weight_fp16_1k.c"),
                          ("fp8_hybrid_epilogue", "block_fp8_framework/hybrid_epilogue_bf16.c"),
                          ("fp8_hybrid_epilogue_bias", "block_fp8_framework/hybrid_epilogue_bias_bf16.c")):
         flags = []
@@ -79,8 +81,8 @@ def main():
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
         elif name == "attn_tile_softmax_packed_bf16":
             flags = ["-DPACKED_STATS=1"]
-        elif name in ("fp8_quant_act_2k", "fp8_dequant_weight_2k"):
-            flags = ["-DRESIDUAL_FP8_2K=1"]
+        elif name in ("fp8_quant_act_3k", "fp8_dequant_weight_3k"):
+            flags = ["-DRESIDUAL_FP8_3K=1"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
@@ -89,6 +91,8 @@ def main():
             "kv_store_bf16": kv_prefix + [b"tensor key_pool", b"tensor value_pool"],
             "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
+            "attn_online_init_f32": [b"tensor tile_max", b"tensor tile_sum", b"tensor tile_output",
+                                     b"tensor new_max", b"tensor new_sum", b"tensor new_output"],
             "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_block_reduce": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                  b"tensor bias", b"tensor output"],
@@ -97,11 +101,13 @@ def main():
                                    b"tensor bias", b"tensor output"],
             "fp8_act_row_scale": [b"tensor input", b"tensor row_scale", b"int tile_tag"],
             "fp8_weight_blk_scale": [b"tensor scales", b"tensor blk_scale", b"int tile_tag"],
-            "fp8_quant_act_1k": [b"tensor input", b"tensor row_scale", b"tensor output", b"int tile_tag"],
-            "fp8_quant_act_2k": [b"tensor input", b"tensor row_scale", b"tensor output", b"int tile_tag"],
+            "fp8_prequant_act": [b"tensor input", b"tensor row_scale", b"tensor q_out",
+                                 b"tensor s_norm", b"int tile_tag"],
+            "fp8_quant_act_1k": [b"tensor q_in", b"tensor s_norm", b"tensor output", b"int tile_tag"],
+            "fp8_quant_act_3k": [b"tensor q_in", b"tensor s_norm", b"tensor output", b"int tile_tag"],
             "fp8_dequant_weight_1k": [b"tensor input", b"tensor scales", b"tensor blk_scale",
                                       b"tensor output", b"int tile_tag"],
-            "fp8_dequant_weight_2k": [b"tensor input", b"tensor scales", b"tensor blk_scale",
+            "fp8_dequant_weight_3k": [b"tensor input", b"tensor scales", b"tensor blk_scale",
                                       b"tensor output", b"int tile_tag"],
             "fp8_hybrid_epilogue": [b"tensor c0", b"tensor c1", b"tensor row_scale",
                                     b"tensor blk_scale", b"tensor output"],

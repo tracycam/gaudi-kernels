@@ -172,17 +172,21 @@ int main(int argc, char** argv) {
           throw std::runtime_error(std::string("FP8 hybrid ELF rejected: ") + guid);
       };
 
-      Tensor t_in{}, t_rs{}, t_a1k{}, t_a2k{}, t_w{}, t_ws{}, t_bs{}, t_w1k{}, t_w2k{};
-      Tensor t_c0{}, t_cp{}, t_bias{}, t_out{};
+      Tensor t_in{}, t_rs{}, t_q2{}, t_sn2{}, t_q3{}, t_sn3{}, t_a1k{}, t_a3k{};
+      Tensor t_w{}, t_ws{}, t_bs{}, t_w1k{}, t_w3k{}, t_c0{}, t_cp{}, t_bias{}, t_out{};
       shape(t_in, DATA_BF16, {256, rows});
       shape(t_rs, DATA_F32, {1, rows});
+      shape(t_q2, DATA_BF16, {128, rows, 2});
+      shape(t_sn2, DATA_F32, {1, rows, 2});
+      shape(t_q3, DATA_BF16, {128, rows, 3});
+      shape(t_sn3, DATA_F32, {1, rows, 3});
       shape(t_a1k, DATA_F16, {256, rows});
-      shape(t_a2k, DATA_F8_143, {512, rows});
+      shape(t_a3k, DATA_F8_143, {1536, rows});
       shape(t_w, DATA_F8_143, {128, 512, 3});
       shape(t_ws, DATA_F32, {3, 4});
       shape(t_bs, DATA_F32, {1, 4});
       shape(t_w1k, DATA_F16, {384, 512});
-      shape(t_w2k, DATA_F8_143, {768, 512});
+      shape(t_w3k, DATA_F8_143, {1536, 512});
       shape(t_c0, DATA_F32, {512, rows});
       shape(t_cp, DATA_F32, {512, rows});
       shape(t_bias, DATA_F32, {512});
@@ -190,10 +194,11 @@ int main(int argc, char** argv) {
 
       check_multi("gk_fp8_act_row_scale_f32_v1", {t_in}, {t_rs}, 2, (rows + 15) / 16);
       check_multi("gk_fp8_weight_blk_scale_f32_v1", {t_ws}, {t_bs}, 2, 1);
-      check_multi("gk_fp8_quant_act_fp16_1k_v1", {t_in, t_rs}, {t_a1k}, 3, 1);
-      check_multi("gk_fp8_quant_act_fp8_2k_v1", {t_in, t_rs}, {t_a2k}, 3, 1);
+      check_multi("gk_fp8_prequant_act_bf16_v1", {t_in, t_rs}, {t_q2, t_sn2}, 3, 1);
+      check_multi("gk_fp8_quant_act_fp16_1k_v1", {t_q2, t_sn2}, {t_a1k}, 3, 1);
+      check_multi("gk_fp8_quant_act_fp8_3k_v1", {t_q3, t_sn3}, {t_a3k}, 3, 1);
       check_multi("gk_fp8_dequant_weight_fp16_1k_v1", {t_w, t_ws, t_bs}, {t_w1k}, 3, 3);
-      check_multi("gk_fp8_dequant_weight_fp8_2k_v1", {t_w, t_ws, t_bs}, {t_w2k}, 3, 3);
+      check_multi("gk_fp8_dequant_weight_fp8_3k_v1", {t_w, t_ws, t_bs}, {t_w3k}, 3, 2);
       check_multi("gk_fp8_hybrid_epilogue_bf16_v1", {t_c0, t_cp, t_rs, t_bs}, {t_out}, 3, 1);
       check_multi("gk_fp8_hybrid_epilogue_bias_bf16_v1", {t_c0, t_cp, t_rs, t_bs, t_bias}, {t_out}, 3, 1);
     }
