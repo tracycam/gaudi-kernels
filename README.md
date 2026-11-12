@@ -1,130 +1,23 @@
 # gaudi-kernels
 
-Gaudi2 LLM kernels, numerical contracts, native execution experiments, and a
-vLLM integration layer. Licensed under [Apache-2.0](LICENSE).
+Zero-legacy-bridge Gaudi2 Synapse TPC kernel provider (`libgaudi_kernels_bundle.so`)
+and pure-CPU numerical reference / load-time codec helpers paired with
+[`tracycam/GaudiRT`](https://github.com/tracycam/GaudiRT). Licensed under
+[Apache-2.0](LICENSE).
 
-> **Companion Zero-Legacy-Bridge Runtime**: For the C++20 Synapse C API runtime,
-> persistent recipe cache, `PrivateUse1` PyTorch backend, and 70-layer TP8
-> decode/`M=32` prefill graph builders paired with this snapshot (`d23e585`), see
-> **[`tracycam/GaudiRT`](https://github.com/tracycam/GaudiRT)** (`8fc3b3b`) and
-> [Phase 4.2 publication provenance](docs/PUBLICATION.md).
+## Layout
 
-This is a research source release. It contains working, shape-specific kernels
-and an integrated multi-request decode implementation, alongside experimental
-alternatives. It is **not a turnkey inference server**, a general replacement
-for CUDA Graph, or a claim that every kernel beats the vendor implementation.
+- `csrc/tpc/common/tpc_math_safe.h`: shared safe TPC transcendental helpers.
+- `csrc/tpc/generic_dense/`: generic Dense / GQA PagedAttention / Norm / RoPE / Argmax TPC kernels.
+- `csrc/tpc/block_fp8_framework/`: generic `128x128` Block-FP8 small-bucket and single-pass SRAM `1K FP16` MME TPC kernels.
+- `csrc/tpc/{mxfp4_*,moe_*}/`: MXFP4 / MoE TPC kernel sources retained for Phase 6 parameterization.
+- `csrc/host/`: unified Synapse Glue provider (`generic_dense_glue.cpp`, `generic_attention_glue.hpp`, `generic_fp8_glue.hpp`).
+- `python/gaudi_kernels/`: pure-CPU OCP-to-Gaudi2 E4M3 half-range codec (`fp8_codec.py`) and FP8 / MXFP4 numerical references (`block_fp8_oracle.py`, `mxfp4_reference.py`).
+- `tools/build_generic_dense_bundle.py`: single-provider `.so` builder with embedded TPC ELF ABI verification.
 
-## What is here
-
-- BF16, ordinary FP8, block-scaled FP8, and MXFP4 linear/GEMV/GEMM paths.
-- TPC decode/compute, SRAM-to-MME graph builders, and numerical reference code.
-- RMSNorm, residual, QKV postprocessing, RoPE/KV, SWA, and MoE building blocks.
-- Typed operator policies, physical-device/NUMA binding, PyTorch bridge execution,
-  and repository-owned vLLM worker/model-runner classes.
-- CPU tests, assembly sources, benchmark drivers, and profiling analysis tools.
-
-See [architecture](docs/ARCHITECTURE.md), [measured status and limitations](docs/STATUS.md),
-[build instructions](docs/BUILDING.md), and [numerical contracts](docs/CONTRACTS.md).
-The next implementation checkpoints and acceptance criteria are in the
-[unified execution plan](docs/UNIFIED_EXECUTION_PLAN.md).
-
-## Start without a Gaudi device
-
-Python 3.10+ is required. From a source checkout:
+## Build & CPU Tests
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-python -m gaudi_kernels
+PYTHONPATH=python python3 -m unittest discover -s tests -p "test_*.py" -v
+python3 tools/build_generic_dense_bundle.py --output-dir build/bundle
 ```
-
-Installation and catalog inspection do not allocate a device. The catalog is a
-historical, shape-specific inventory; it does not enable experimental backends.
-The Python distribution is named `gaudi-llm-kernels`; its import is `gaudi_kernels`.
-
-For CPU validation, install a CPU PyTorch build, NumPy, pytest, and a C++17 compiler:
-
-```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install numpy pytest
-PYTHONPATH=python python -m pytest tests -q
-```
-
-Device builds require a separately installed compatible Gaudi SDK, TPC compiler,
-and PyTorch HPU stack. The qualified development stack was Gaudi2 / Synapse 1.24.1
-/ PyTorch HPU 2.11 for the current bridge fork; other combinations require validation. Proprietary SDKs,
-compiled experiment libraries, model weights, private prompts, and raw traces
-are not distributed here.
-
-## vLLM integration
-
-vLLM owns requests, scheduling, KV allocation, and output delivery. The worker and
-runner express the inputs and capture scope; the PyTorch bridge owns execution.
-Generic integration uses `FrameworkHPUWorker` without MiMo manifests; the reference
-model's operator installation lives in `MimoHPUWorker`. Validation RPCs and intrusive instrumentation
-are isolated in `DiagnosticHPUWorker`. The admitted whole-step scope currently
-covers plain synchronous greedy decode. MTP/prefill extensions need their own gates.
-
-The source expects additional interfaces in the development vLLM-Gaudi plugin.
-An [interface patch](integrations/vllm-gaudi/README.md) is included for review;
-it is not a complete patch against an arbitrary upstream release. Native serving
-also requires separately built and qualified artifacts with matching SHA pins.
-`pip install .` alone cannot reproduce the full-model deployment.
-
-## Performance reporting
-
-The qualified bridge-plus-serving combination achieved 91.02 tokens/s for one
-non-speculative B1 stream and 137.77 tokens/s aggregate for B2 at 4K. These results
-use bridge `47f28b972f9` and serving `a450e13`; the current cleanup must be revalidated.
-They do not establish unchanged-application, bridge-only or cross-model gains.
-Earlier native executor results were approximately 90–92 tokens/s for one
-non-speculative stream. With 4K contexts, two streams achieved about 63 tokens/s
-each and three about 60–61 **after all requests entered decode**. Prefill caused
-substantial earlier stalls. These are development-system observations, not
-portable guarantees or HTTP serving benchmarks. See [scope and measurements](docs/STATUS.md).
-
-One Python/FFI call is not one hardware launch: the integrated replay still
-submits hundreds of SDK operations. Algorithmic bytes/time is not a measurement
-of physical HBM transactions. Kernel speedups are not automatically model speedups.
-
-The [consolidation contract and roadmap](docs/REUSABLE_INFRASTRUCTURE.md) identifies
-which components are reusable, which remain model-specific, and how cleanup is
-checked without sacrificing the measured execution path.
-
-## Source layout
-
-```text
-python/gaudi_kernels/engine/    Typed policies and artifact ownership
-python/gaudi_kernels/serving/   Launcher, worker, runner, model adapter
-  models/                     Model-specific weight/layout adapters
-  executor/                   Operator bindings and experimental query state
-  diagnostics/                Explicit validation worker and probes
-csrc/tpc/                     TPC source kernels
-csrc/host/                    Kernel database glue
-csrc/ops/                     Synapse graph construction
-csrc/torch/                   PyTorch custom-operator registration
-tools/archive/legacy_execution/ Retired runtimes; excluded from installable distributions
-reference/                    Numerical and implementation references
-benchmarks/                   Experimental probes and benchmark drivers
-tools/                        Build, validation, and analysis utilities
-tests/                        CPU and SDK-substitute tests
-```
-
-Historical benchmark scripts may require separately generated fixtures or local
-artifacts. Their presence is not a support or correctness guarantee. The release
-scope and omitted assets are documented in [publication provenance](docs/PUBLICATION.md).
-
-## Contributing and licensing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Retain third-party notices, state precision
-changes, and report failures along with successes. Hardware tests must run only
-on devices assigned to the experiment.
-
-Project-authored code is available under Apache-2.0. Existing third-party
-copyrights and license notices remain applicable; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-This is an independent project, not an Intel-endorsed product.
-
-中文：这是 Gaudi2 内核与原生执行基础设施的研究源码仓库。已验证的模型路径和
-仍未完成的 MTP、prefill、通用化工作均在状态文档中明确列出；不包含 SDK、权重、
-私有业务输入或实验二进制，也不承诺克隆后即可一键运行完整模型。

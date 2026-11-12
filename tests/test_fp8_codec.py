@@ -67,20 +67,6 @@ class FP8CodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reencode_e4m3fn_half(weight, scales.to(torch.float64))
 
-    def test_existing_block_preparation_uses_same_codes_and_scales(self):
-        from gaudi_kernels.block_fp8 import prepare_block_fp8
-
-        raw = (torch.arange(3 * 130, dtype=torch.int32) % 127).to(torch.uint8).reshape(3, 130)
-        weight = raw.view(torch.float8_e4m3fn)
-        scales = torch.tensor([[0.25, 0.5]], dtype=torch.float32)
-        encoded, adjusted, rounded = reencode_e4m3fn_half(weight, scales)
-        prepared = prepare_block_fp8(weight, scales)
-        unpacked = prepared.weight.view(torch.uint8).permute(1, 0, 2).reshape(3, 256)
-        self.assertTrue(torch.equal(unpacked[:, :130], encoded.view(torch.uint8)))
-        self.assertTrue(torch.equal(unpacked[:, 130:], torch.zeros((3, 126), dtype=torch.uint8)))
-        self.assertTrue(torch.equal(prepared.scales, adjusted))
-        self.assertEqual(prepared.rounded_half_values, rounded)
-
 
 if __name__ == "__main__":
     unittest.main()

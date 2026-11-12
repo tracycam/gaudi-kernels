@@ -1,9 +1,5 @@
-"""Kernel inventory; experimental tensor bindings are explicitly loaded separately."""
-from importlib.resources import files
-import json
+"""Zero-legacy-bridge CPU numerical references and load-time FP8 codecs."""
 
-def catalog():
-    """Return artifact readiness and numerical contracts; never select a backend."""
-    return json.loads(files(__package__).joinpath('catalog.json').read_text())
+from gaudi_kernels.fp8_codec import reencode_e4m3fn_half
 
-__all__ = ['catalog']
+__all__ = ["reencode_e4m3fn_half"]
