@@ -73,7 +73,6 @@ int kind(const char* name) {
   if (std::strcmp(name, kSchedulerMetadata) == 0) return 14;
   if (std::strcmp(name, kSchedulerTokens) == 0) return 15;
   if (std::strcmp(name, generic_attention::kSoftmax) == 0) return 16;
-  if (std::strcmp(name, generic_attention::kOnlineInit) == 0) return 43;
   if (std::strcmp(name, generic_attention::kMerge) == 0) return 17;
   if (std::strcmp(name, generic_attention::kFinalize) == 0) return 18;
   if (std::strcmp(name, generic_attention::kHeadStore) == 0) return 19;
@@ -81,7 +80,6 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
   if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
   if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
-  if (std::strcmp(name, generic_attention::kPack) == 0) return 24;
   return -1;
 }
 
@@ -565,7 +563,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 37 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 35 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -596,23 +594,21 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
     guids[19].kernelProperties = 0;
     guids[19].supportsDynamicShapes = 1;
   }
-  if (guids && *count && capacity > 20) std::strcpy(guids[20].name, generic_attention::kPack);
-  if (guids && *count && capacity > 21) std::strcpy(guids[21].name, kPagedAlloc);
-  if (guids && *count && capacity > 22) std::strcpy(guids[22].name, kPagedFree);
-  if (guids && *count && capacity > 23) std::strcpy(guids[23].name, kArgmaxBf16);
-  if (guids && *count && capacity > 24) std::strcpy(guids[24].name, kArgmaxF32);
-  if (guids && *count && capacity > 25) std::strcpy(guids[25].name, kArgmaxFinish);
-  if (guids && *count && capacity > 26) std::strcpy(guids[26].name, generic_fp8::kQuant);
-  if (guids && *count && capacity > 27) std::strcpy(guids[27].name, generic_fp8::kReduce);
-  if (guids && *count && capacity > 28) std::strcpy(guids[28].name, generic_fp8::kTokenQuant);
-  if (guids && *count && capacity > 29) std::strcpy(guids[29].name, generic_fp8::kChannelFinish);
-  if (guids && *count && capacity > 30) std::strcpy(guids[30].name, generic_fp8::kActRowScale);
-  if (guids && *count && capacity > 31) std::strcpy(guids[31].name, generic_fp8::kWeightBlkScale);
-  if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kQuantAct1k);
-  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kDequantWeight1k);
-  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kEpilogue);
-  if (guids && *count && capacity > 35) std::strcpy(guids[35].name, generic_fp8::kEpilogueBias);
-  if (guids && *count && capacity > 36) std::strcpy(guids[36].name, generic_attention::kOnlineInit);
+  if (guids && *count && capacity > 20) std::strcpy(guids[20].name, kPagedAlloc);
+  if (guids && *count && capacity > 21) std::strcpy(guids[21].name, kPagedFree);
+  if (guids && *count && capacity > 22) std::strcpy(guids[22].name, kArgmaxBf16);
+  if (guids && *count && capacity > 23) std::strcpy(guids[23].name, kArgmaxF32);
+  if (guids && *count && capacity > 24) std::strcpy(guids[24].name, kArgmaxFinish);
+  if (guids && *count && capacity > 25) std::strcpy(guids[25].name, generic_fp8::kQuant);
+  if (guids && *count && capacity > 26) std::strcpy(guids[26].name, generic_fp8::kReduce);
+  if (guids && *count && capacity > 27) std::strcpy(guids[27].name, generic_fp8::kTokenQuant);
+  if (guids && *count && capacity > 28) std::strcpy(guids[28].name, generic_fp8::kChannelFinish);
+  if (guids && *count && capacity > 29) std::strcpy(guids[29].name, generic_fp8::kActRowScale);
+  if (guids && *count && capacity > 30) std::strcpy(guids[30].name, generic_fp8::kWeightBlkScale);
+  if (guids && *count && capacity > 31) std::strcpy(guids[31].name, generic_fp8::kQuantAct1k);
+  if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kDequantWeight1k);
+  if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kEpilogue);
+  if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kEpilogueBias);
   return GLUE_SUCCESS;
 }
 
@@ -629,13 +625,12 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 9) return instantiate_cast_f32_to_bf16(input, output);
   if (id == 10) return instantiate_index_put_i64(input, output);
   if (id == 16) return generic_attention::instantiate_softmax(input, output);
-  if (id == 17 || id == 18 || id == 43)
-    return generic_attention::instantiate_online(input, output, id == 17 ? 1 : (id == 43 ? 2 : 0));
+  if (id == 17 || id == 18)
+    return generic_attention::instantiate_online(input, output, id == 17);
   if (id == 19) return generic_attention::instantiate_head_store(input, output);
   if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
-  if (id == 24) return generic_attention::instantiate_pack(input, output);
   if (id == 25 || id == 26) return instantiate_paged_slots(input, output, id == 26);
   if (id == 27 || id == 28 || id == 29) return instantiate_argmax(input, output, id);
   if (id == 30) return generic_fp8::instantiate_quant(input, output);

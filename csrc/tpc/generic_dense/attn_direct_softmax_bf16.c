@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../common/tpc_math_safe.h"
 
-// Coarsened VRF-only single-block causal softmax for 3D {keys, rows, heads}
-// and 4D {keys, rows, group, kv_heads} KV buckets up to 512 (zero VLM spills).
+// Coarsened 2-row LUT-free single-block causal softmax for 3D {keys, rows, heads}
+// and 4D {keys, rows, group, kv_heads} KV buckets up to 512.
+// Uses 2-row tensor-load pipelining across all key buckets {128, 256, 384, 512}
+// with 2-FMA Cody-Waite expf and 3-step Newton-Raphson rcp (0 SFU LUTs).
 void main(tensor scores, tensor positions, tensor header,
           tensor probabilities, float scale) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
@@ -22,7 +24,7 @@ void main(tensor scores, tensor positions, tensor header,
         const int last = s_i32_min(rows, first + 16);
         int row = first;
 
-        if (keys == 512 && max_key_blocks > 0) {
+        if (max_key_blocks > 0) {
           for (; row + 1 < last && row + 1 < valid_rows; row += 2) {
             int5 pc0 = {row, 0, 0, 0, 0}, pc1 = {row + 1, 0, 0, 0, 0};
             const int lk0 = s_i32_min(s_i32_ld_g(gen_addr(pc0, positions)) - key_start, valid_keys - 1);
@@ -30,7 +32,7 @@ void main(tensor scores, tensor positions, tensor header,
             if (lk0 < 0 || lk1 < 0) break;
 
             int5 q0 = {0, row, head, kv_h, 0}, q1 = {0, row + 1, head, kv_h, 0};
-            if (lk0 >= 511 && lk1 >= 511) {
+            if (keys == 512 && lk0 >= 511 && lk1 >= 511) {
               q0[0] = 0;   float64 a0 = v_f32_ld_tnsr_b(q0, scores) * scale;
               q0[0] = 64;  float64 a1 = v_f32_ld_tnsr_b(q0, scores) * scale;
               q0[0] = 128; float64 a2 = v_f32_ld_tnsr_b(q0, scores) * scale;
@@ -58,27 +60,27 @@ void main(tensor scores, tensor positions, tensor header,
               float64 o0 = v_f32_sel_eq_f32_b(m0, ni, 0.f, m0);
               float64 o1 = v_f32_sel_eq_f32_b(m1, ni, 0.f, m1);
 
-              TPC_EXP_F32_SAFE_PAIR(a0 - o0, a1 - o0, a0, a1);
-              float64 sum0a = 0.f + a0, sum0b = 0.f + a1;
-              TPC_EXP_F32_SAFE_PAIR(b0 - o1, b1 - o1, b0, b1);
-              float64 sum1a = 0.f + b0, sum1b = 0.f + b1;
-              TPC_EXP_F32_SAFE_PAIR(a2 - o0, a3 - o0, a2, a3);
+              TPC_EXP_NEG_F32_PAIR(a0 - o0, a1 - o0, a0, a1);
+              float64 sum0a = a0, sum0b = a1;
+              TPC_EXP_NEG_F32_PAIR(b0 - o1, b1 - o1, b0, b1);
+              float64 sum1a = b0, sum1b = b1;
+              TPC_EXP_NEG_F32_PAIR(a2 - o0, a3 - o0, a2, a3);
               sum0a += a2; sum0b += a3;
-              TPC_EXP_F32_SAFE_PAIR(b2 - o1, b3 - o1, b2, b3);
+              TPC_EXP_NEG_F32_PAIR(b2 - o1, b3 - o1, b2, b3);
               sum1a += b2; sum1b += b3;
-              TPC_EXP_F32_SAFE_PAIR(a4 - o0, a5 - o0, a4, a5);
+              TPC_EXP_NEG_F32_PAIR(a4 - o0, a5 - o0, a4, a5);
               sum0a += a4; sum0b += a5;
-              TPC_EXP_F32_SAFE_PAIR(b4 - o1, b5 - o1, b4, b5);
+              TPC_EXP_NEG_F32_PAIR(b4 - o1, b5 - o1, b4, b5);
               sum1a += b4; sum1b += b5;
-              TPC_EXP_F32_SAFE_PAIR(a6 - o0, a7 - o0, a6, a7);
+              TPC_EXP_NEG_F32_PAIR(a6 - o0, a7 - o0, a6, a7);
               sum0a += a6; sum0b += a7;
-              TPC_EXP_F32_SAFE_PAIR(b6 - o1, b7 - o1, b6, b7);
+              TPC_EXP_NEG_F32_PAIR(b6 - o1, b7 - o1, b6, b7);
               sum1a += b6; sum1b += b7;
 
               float64 s0 = v_f32_reduce_add(sum0a + sum0b);
               float64 s1 = v_f32_reduce_add(sum1a + sum1b);
-              float64 inv0 = v_f32_sel_grt_f32_b(s0, 0.f, v_reciprocal_f32(v_f32_sel_grt_f32_b(s0, 0.f, s0, 1.f)), 0.f);
-              float64 inv1 = v_f32_sel_grt_f32_b(s1, 0.f, v_reciprocal_f32(v_f32_sel_grt_f32_b(s1, 0.f, s1, 1.f)), 0.f);
+              float64 inv0 = tpc_rcp_nonneg_f32(s0);
+              float64 inv1 = tpc_rcp_nonneg_f32(s1);
 
               float128 pa0 = {a0 * inv0, a1 * inv0}, pb0 = {b0 * inv1, b1 * inv1};
               float128 pa1 = {a2 * inv0, a3 * inv0}, pb1 = {b2 * inv1, b3 * inv1};
@@ -143,41 +145,41 @@ void main(tensor scores, tensor positions, tensor header,
               float64 o0 = v_f32_sel_eq_f32_b(m0, ni, 0.f, m0);
               float64 o1 = v_f32_sel_eq_f32_b(m1, ni, 0.f, m1);
 
-              TPC_EXP_F32_SAFE_PAIR(a0 - o0, a1 - o0, a0, a1);
+              TPC_EXP_NEG_F32_PAIR(a0 - o0, a1 - o0, a0, a1);
               a0 = v_f32_sel_leq_i32_b((int64)lanes, vlk0, a0, 0.f);
               a1 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 64, a1, 0.f);
-              float64 sum0a = 0.f + a0, sum0b = 0.f + a1;
-              TPC_EXP_F32_SAFE_PAIR(b0 - o1, b1 - o1, b0, b1);
+              float64 sum0a = a0, sum0b = a1;
+              TPC_EXP_NEG_F32_PAIR(b0 - o1, b1 - o1, b0, b1);
               b0 = v_f32_sel_leq_i32_b((int64)lanes, vlk1, b0, 0.f);
               b1 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 64, b1, 0.f);
-              float64 sum1a = 0.f + b0, sum1b = 0.f + b1;
+              float64 sum1a = b0, sum1b = b1;
 
               if (ab > 128) {
-                TPC_EXP_F32_SAFE_PAIR(a2 - o0, a3 - o0, a2, a3);
+                TPC_EXP_NEG_F32_PAIR(a2 - o0, a3 - o0, a2, a3);
                 a2 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 128, a2, 0.f);
                 a3 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 192, a3, 0.f);
                 sum0a += a2; sum0b += a3;
-                TPC_EXP_F32_SAFE_PAIR(b2 - o1, b3 - o1, b2, b3);
+                TPC_EXP_NEG_F32_PAIR(b2 - o1, b3 - o1, b2, b3);
                 b2 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 128, b2, 0.f);
                 b3 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 192, b3, 0.f);
                 sum1a += b2; sum1b += b3;
               }
               if (ab > 256) {
-                TPC_EXP_F32_SAFE_PAIR(a4 - o0, a5 - o0, a4, a5);
+                TPC_EXP_NEG_F32_PAIR(a4 - o0, a5 - o0, a4, a5);
                 a4 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 256, a4, 0.f);
                 a5 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 320, a5, 0.f);
                 sum0a += a4; sum0b += a5;
-                TPC_EXP_F32_SAFE_PAIR(b4 - o1, b5 - o1, b4, b5);
+                TPC_EXP_NEG_F32_PAIR(b4 - o1, b5 - o1, b4, b5);
                 b4 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 256, b4, 0.f);
                 b5 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 320, b5, 0.f);
                 sum1a += b4; sum1b += b5;
               }
               if (ab > 384) {
-                TPC_EXP_F32_SAFE_PAIR(a6 - o0, a7 - o0, a6, a7);
+                TPC_EXP_NEG_F32_PAIR(a6 - o0, a7 - o0, a6, a7);
                 a6 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 384, a6, 0.f);
                 a7 = v_f32_sel_leq_i32_b((int64)lanes, vlk0 - 448, a7, 0.f);
                 sum0a += a6; sum0b += a7;
-                TPC_EXP_F32_SAFE_PAIR(b6 - o1, b7 - o1, b6, b7);
+                TPC_EXP_NEG_F32_PAIR(b6 - o1, b7 - o1, b6, b7);
                 b6 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 384, b6, 0.f);
                 b7 = v_f32_sel_leq_i32_b((int64)lanes, vlk1 - 448, b7, 0.f);
                 sum1a += b6; sum1b += b7;
@@ -185,35 +187,41 @@ void main(tensor scores, tensor positions, tensor header,
 
               float64 s0 = v_f32_reduce_add(sum0a + sum0b);
               float64 s1 = v_f32_reduce_add(sum1a + sum1b);
-              float64 inv0 = v_f32_sel_grt_f32_b(s0, 0.f, v_reciprocal_f32(v_f32_sel_grt_f32_b(s0, 0.f, s0, 1.f)), 0.f);
-              float64 inv1 = v_f32_sel_grt_f32_b(s1, 0.f, v_reciprocal_f32(v_f32_sel_grt_f32_b(s1, 0.f, s1, 1.f)), 0.f);
+              float64 inv0 = tpc_rcp_nonneg_f32(s0);
+              float64 inv1 = tpc_rcp_nonneg_f32(s1);
 
               float128 pa0 = {a0 * inv0, a1 * inv0}, pb0 = {b0 * inv1, b1 * inv1};
               q0[0] = 0; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa0, SW_LINEAR | SW_RHNE));
               q1[0] = 0; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb0, SW_LINEAR | SW_RHNE));
-              if (ab > 128) {
-                float128 pa1 = {a2 * inv0, a3 * inv0}, pb1 = {b2 * inv1, b3 * inv1};
-                q0[0] = 128; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa1, SW_LINEAR | SW_RHNE));
-                q1[0] = 128; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb1, SW_LINEAR | SW_RHNE));
-              } else {
-                q0[0] = 128; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
-                q1[0] = 128; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+              if (keys > 128) {
+                if (ab > 128) {
+                  float128 pa1 = {a2 * inv0, a3 * inv0}, pb1 = {b2 * inv1, b3 * inv1};
+                  q0[0] = 128; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa1, SW_LINEAR | SW_RHNE));
+                  q1[0] = 128; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb1, SW_LINEAR | SW_RHNE));
+                } else {
+                  q0[0] = 128; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
+                  q1[0] = 128; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+                }
               }
-              if (ab > 256) {
-                float128 pa2 = {a4 * inv0, a5 * inv0}, pb2 = {b4 * inv1, b5 * inv1};
-                q0[0] = 256; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa2, SW_LINEAR | SW_RHNE));
-                q1[0] = 256; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb2, SW_LINEAR | SW_RHNE));
-              } else {
-                q0[0] = 256; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
-                q1[0] = 256; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+              if (keys > 256) {
+                if (ab > 256) {
+                  float128 pa2 = {a4 * inv0, a5 * inv0}, pb2 = {b4 * inv1, b5 * inv1};
+                  q0[0] = 256; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa2, SW_LINEAR | SW_RHNE));
+                  q1[0] = 256; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb2, SW_LINEAR | SW_RHNE));
+                } else {
+                  q0[0] = 256; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
+                  q1[0] = 256; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+                }
               }
-              if (ab > 384) {
-                float128 pa3 = {a6 * inv0, a7 * inv0}, pb3 = {b6 * inv1, b7 * inv1};
-                q0[0] = 384; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa3, SW_LINEAR | SW_RHNE));
-                q1[0] = 384; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb3, SW_LINEAR | SW_RHNE));
-              } else {
-                q0[0] = 384; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
-                q1[0] = 384; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+              if (keys > 384) {
+                if (ab > 384) {
+                  float128 pa3 = {a6 * inv0, a7 * inv0}, pb3 = {b6 * inv1, b7 * inv1};
+                  q0[0] = 384; v_bf16_st_tnsr(q0, probabilities, convert_float128_to_bfloat128(pa3, SW_LINEAR | SW_RHNE));
+                  q1[0] = 384; v_bf16_st_tnsr(q1, probabilities, convert_float128_to_bfloat128(pb3, SW_LINEAR | SW_RHNE));
+                } else {
+                  q0[0] = 384; v_bf16_st_tnsr(q0, probabilities, (bfloat128)0.f);
+                  q1[0] = 384; v_bf16_st_tnsr(q1, probabilities, (bfloat128)0.f);
+                }
               }
             }
           }
@@ -255,7 +263,7 @@ void main(tensor scores, tensor positions, tensor header,
                 float64 x0 = (g < 2) ? ((g == 0) ? v0 : v2) : ((g == 2) ? v4 : v6);
                 float64 x1 = (g < 2) ? ((g == 0) ? v1 : v3) : ((g == 2) ? v5 : v7);
                 float64 e0, e1;
-                TPC_EXP_F32_SAFE_PAIR(x0 - origin, x1 - origin, e0, e1);
+                TPC_EXP_NEG_F32_PAIR(x0 - origin, x1 - origin, e0, e1);
                 e0 = v_f32_sel_leq_i32_b((int64)lanes, last_key - base, e0, 0.f);
                 e1 = v_f32_sel_leq_i32_b((int64)lanes, last_key - (base + 64), e1, 0.f);
                 sum0 += e0; sum1 += e1;
@@ -266,8 +274,7 @@ void main(tensor scores, tensor positions, tensor header,
               }
 
               float64 sum = v_f32_reduce_add(sum0 + sum1);
-              float64 safe = v_f32_sel_grt_f32_b(sum, 0.f, sum, 1.f);
-              float64 inverse = v_f32_sel_grt_f32_b(sum, 0.f, v_reciprocal_f32(safe), 0.f);
+              float64 inverse = tpc_rcp_nonneg_f32(sum);
 
               #pragma clang loop unroll(disable)
               for (int g = 0; g < active_groups; ++g) {

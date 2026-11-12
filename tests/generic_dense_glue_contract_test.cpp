@@ -46,7 +46,7 @@ static void check_patterns(const std::vector<Tensor>& tensors,
 
 static void check_kernel(pfnInstantiateTpcKernel instantiate, pfnGetSupportedDataLayout layouts,
                          const char* guid, std::vector<Tensor> inputs, std::vector<Tensor> outputs,
-                         float* scalar, bool sparse_pool_reuse = false) {
+                         void* scalar, bool sparse_pool_reuse = false) {
   HabanaKernelParams params{};
   std::strcpy(params.guid.name, guid);
   params.inputTensorNr = inputs.size();
@@ -55,7 +55,7 @@ static void check_kernel(pfnInstantiateTpcKernel instantiate, pfnGetSupportedDat
   params.outputTensors = outputs.data();
   if (scalar) {
     params.nodeParams.nodeParams = scalar;
-    params.nodeParams.nodeParamsSize = sizeof(*scalar);
+    params.nodeParams.nodeParamsSize = 4;
   }
 
   uint32_t count = 0;
@@ -124,13 +124,9 @@ int main(int argc, char** argv) {
     const auto scores = tensor(DATA_F32, {128, 4, 4});
     const auto probabilities = tensor(DATA_BF16, {128, 4, 4});
     const auto stats = tensor(DATA_F32, {64, 4});
-    const auto expanded_stats = tensor(DATA_F32, {64, 4, 4});
     const auto data = tensor(DATA_F32, {64, 4, 4});
     const auto data_bf16 = tensor(DATA_BF16, {64, 4, 4});
     float scale = 0.125f;
-    check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
-                 {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})},
-                 {probabilities, expanded_stats, expanded_stats}, &scale);
     check_kernel(instantiate, layouts, "gk_attn_tile_softmax_bf16_v1",
                  {scores, tensor(DATA_I32, {4}), tensor(DATA_I32, {3})},
                  {probabilities, stats, stats}, &scale);
@@ -138,10 +134,6 @@ int main(int argc, char** argv) {
                  {tensor(DATA_F32, {512, 256, 56}), tensor(DATA_I32, {256}), tensor(DATA_I32, {3})},
                  {tensor(DATA_BF16, {512, 256, 56}), tensor(DATA_F32, {256, 56}), tensor(DATA_F32, {256, 56})},
                  &scale);
-    check_kernel(instantiate, layouts, "gk_attn_pack_stats_f32_v1",
-                 {expanded_stats, expanded_stats}, {stats, stats}, nullptr);
-    check_kernel(instantiate, layouts, "gk_attn_online_init_f32_v1",
-                 {stats, stats, data}, {stats, stats, data}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_merge_f32_v1",
                  {stats, stats, data, stats, stats, data}, {stats, stats, data}, nullptr);
     check_kernel(instantiate, layouts, "gk_attn_online_finalize_bf16_v1",
@@ -160,11 +152,13 @@ int main(int argc, char** argv) {
     check_kernel(instantiate, layouts, "gk_attn_direct_softmax_bf16_v1",
                  {scores4d, tensor(DATA_I32, {512}), tensor(DATA_I32, {3})},
                  {probs4d}, &scale);
-    check_kernel(instantiate, layouts, "gk_attn_online_init_f32_v1",
-                 {stats4d, stats4d, data4d}, {stats4d, stats4d, data4d}, nullptr);
+    int32_t prev_unscaled = 1;
     check_kernel(instantiate, layouts, "gk_attn_online_merge_f32_v1",
                  {stats4d, stats4d, data4d, stats4d, stats4d, data4d},
                  {stats4d, stats4d, data4d}, nullptr);
+    check_kernel(instantiate, layouts, "gk_attn_online_merge_f32_v1",
+                 {stats4d, stats4d, data4d, stats4d, stats4d, data4d},
+                 {stats4d, stats4d, data4d}, &prev_unscaled);
     check_kernel(instantiate, layouts, "gk_attn_online_finalize_bf16_v1",
                  {stats4d, data4d}, {data4d_bf16}, nullptr);
     const auto source_kv = tensor(DATA_BF16, {1024, 4});

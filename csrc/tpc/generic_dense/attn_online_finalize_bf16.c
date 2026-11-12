@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "../common/tpc_math_safe.h"
 
 // Finalize online softmax running state into BF16 (supports 3D and 4D layouts).
 void main(tensor sums, tensor accumulator, tensor result) {
@@ -10,8 +11,7 @@ void main(tensor sums, tensor accumulator, tensor result) {
         const int first = block * 64;
         int5 stat = {first, head, kv_h, 0, 0};
         float64 denominator = v_f32_ld_tnsr_b(stat, sums);
-        float64 safe = v_f32_sel_grt_f32_b(denominator, 0.f, denominator, 1.f);
-        float64 inverse = v_f32_sel_grt_f32_b(denominator, 0.f, v_reciprocal_f32(safe), 0.f);
+        float64 inverse = tpc_rcp_nonneg_f32(denominator);
         const int last = s_i32_min(rows - first, 64);
         int item = 0;
         if (width == 128) {

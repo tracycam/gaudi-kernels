@@ -9,9 +9,6 @@
 #include <initializer_list>
 
 extern "C" unsigned char _binary_attn_tile_softmax_bf16_o_start, _binary_attn_tile_softmax_bf16_o_end;
-extern "C" unsigned char _binary_attn_tile_softmax_packed_bf16_o_start, _binary_attn_tile_softmax_packed_bf16_o_end;
-extern "C" unsigned char _binary_attn_pack_stats_f32_o_start, _binary_attn_pack_stats_f32_o_end;
-extern "C" unsigned char _binary_attn_online_init_f32_o_start, _binary_attn_online_init_f32_o_end;
 extern "C" unsigned char _binary_attn_online_merge_f32_o_start, _binary_attn_online_merge_f32_o_end;
 extern "C" unsigned char _binary_attn_online_finalize_bf16_o_start, _binary_attn_online_finalize_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_head_major_bf16_o_start, _binary_kv_store_head_major_bf16_o_end;
@@ -24,8 +21,6 @@ extern "C" unsigned char _binary_attn_tile_indices_i32_o_start, _binary_attn_til
 namespace generic_attention {
 using namespace tpc_lib_api;
 constexpr const char* kSoftmax = "gk_attn_tile_softmax_bf16_v1";
-constexpr const char* kPack = "gk_attn_pack_stats_f32_v1";
-constexpr const char* kOnlineInit = "gk_attn_online_init_f32_v1";
 constexpr const char* kMerge = "gk_attn_online_merge_f32_v1";
 constexpr const char* kFinalize = "gk_attn_online_finalize_bf16_v1";
 constexpr const char* kHeadStore = "gk_kv_store_head_major_bf16_v1";
@@ -265,31 +260,6 @@ inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernel
                 &_binary_attn_decode_normalize_bf16_o_end);
 }
 
-inline GlueCodeReturn instantiate_pack(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
-  if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
-  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  const auto& data = input->inputTensors[0].geometry;
-  const unsigned long rows = data.maxSizes[1], heads = data.maxSizes[2], padded = (rows + 63) / 64 * 64;
-  if (!rows || rows > 256 || !heads || heads > 256 ||
-      !shape(input->inputTensors[0], DATA_F32, {64, rows, heads}) ||
-      !shape(input->inputTensors[1], DATA_F32, {64, rows, heads}) ||
-      !shape(input->outputTensors[0], DATA_F32, {padded, heads}) ||
-      !shape(input->outputTensors[1], DATA_F32, {padded, heads})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  output->indexSpaceRank = 3;
-  output->indexSpaceGeometry[0] = heads;
-  output->indexSpaceGeometry[1] = (rows + 63) / 64;
-  output->indexSpaceGeometry[2] = 1;
-  for (unsigned i = 0; i < 2; ++i) {
-    auto& a = output->inputTensorAccessPattern[i];
-    mapped(a, 0, 2, 63, 0); mapped(a, 1, 1, 63, 64); mapped(a, 2, 0, 0, 1);
-    auto& b = output->outputTensorAccessPattern[i];
-    mapped(b, 0, 1, 63, 64); mapped(b, 1, 0, 0, 1);
-  }
-  output->kernel.paramsNr = 0;
-  return binary(output, &_binary_attn_pack_stats_f32_o_start, &_binary_attn_pack_stats_f32_o_end);
-}
-
 inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 3) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 3) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
@@ -339,8 +309,8 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
     } params{scale, static_cast<int32_t>(block_rows)};
     output->kernel.paramsNr = 2;
     std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
-    return binary(output, &_binary_attn_tile_softmax_packed_bf16_o_start,
-                  &_binary_attn_tile_softmax_packed_bf16_o_end);
+    return binary(output, &_binary_attn_tile_softmax_bf16_o_start,
+                  &_binary_attn_tile_softmax_bf16_o_end);
   }
   const unsigned long keys = score.maxSizes[0], rows = score.maxSizes[1], heads = score.maxSizes[2];
   const unsigned long stat_rows = (rows + 63) / 64 * 64;
@@ -349,17 +319,12 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
       keys * rows * heads > kMaxScoreElements3d ||
       !shape(input->inputTensors[0], DATA_F32, {keys, rows, heads}) ||
       !shape(input->inputTensors[1], DATA_I32, {rows}) || !shape(input->inputTensors[2], DATA_I32, {3}) ||
-      !shape(input->outputTensors[0], DATA_BF16, {keys, rows, heads}))
+      !shape(input->outputTensors[0], DATA_BF16, {keys, rows, heads}) ||
+      !shape(input->outputTensors[1], DATA_F32, {stat_rows, heads}) ||
+      !shape(input->outputTensors[2], DATA_F32, {stat_rows, heads}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  const bool expanded_stats =
-      shape(input->outputTensors[1], DATA_F32, {64, rows, heads}) &&
-      shape(input->outputTensors[2], DATA_F32, {64, rows, heads});
-  const bool packed_stats =
-      shape(input->outputTensors[1], DATA_F32, {stat_rows, heads}) &&
-      shape(input->outputTensors[2], DATA_F32, {stat_rows, heads});
-  if (!expanded_stats && !packed_stats) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  const unsigned long block_rows = (packed_stats && (rows % 64 != 0)) ? 64UL : 16UL;
-  const unsigned long row_blocks = packed_stats ? (stat_rows / block_rows) : ((rows + block_rows - 1) / block_rows);
+  const unsigned long block_rows = (rows % 64 != 0) ? 64UL : 16UL;
+  const unsigned long row_blocks = stat_rows / block_rows;
   output->indexSpaceRank = 3;
   output->indexSpaceGeometry[0] = heads;
   output->indexSpaceGeometry[1] = row_blocks;
@@ -374,14 +339,8 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
   output->inputTensorAccessPattern[2].allRequired = 1;
   for (unsigned i : {1u, 2u}) {
     auto& access = output->outputTensorAccessPattern[i];
-    if (packed_stats) {
-      mapped(access, 0, 1, block_rows - 1, block_rows);
-      mapped(access, 1, 0, 0, 1);
-    } else {
-      mapped(access, 0, 2, 63, 0);
-      mapped(access, 1, 1, block_rows - 1, block_rows);
-      mapped(access, 2, 0, 0, 1);
-    }
+    mapped(access, 0, 1, block_rows - 1, block_rows);
+    mapped(access, 1, 0, 0, 1);
   }
   struct SoftmaxScalarParams {
     float scale;
@@ -389,21 +348,29 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
   } params{scale, static_cast<int32_t>(block_rows)};
   output->kernel.paramsNr = 2;
   std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
-  if (packed_stats)
-    return binary(output, &_binary_attn_tile_softmax_packed_bf16_o_start,
-                  &_binary_attn_tile_softmax_packed_bf16_o_end);
   return binary(output, &_binary_attn_tile_softmax_bf16_o_start, &_binary_attn_tile_softmax_bf16_o_end);
 }
 
-// mode: 0 = finalize, 1 = merge, 2 = init
+// mode: false = finalize, true = merge
 inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernelInstantiation* output,
-                                         int mode) {
-  const unsigned expected_in = mode == 1 ? 6u : (mode == 2 ? 3u : 2u);
-  const unsigned expected_out = mode == 0 ? 1u : 3u;
+                                         bool merge) {
+  const unsigned expected_in = merge ? 6u : 2u;
+  const unsigned expected_out = merge ? 3u : 1u;
   if (input->inputTensorNr != expected_in) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != expected_out) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  const auto& data = input->inputTensors[mode == 0 ? 1 : 2].geometry;
+  int32_t prev_unscaled = 0;
+  if (merge) {
+    if (input->nodeParams.nodeParamsSize == sizeof(int32_t)) {
+      if (!input->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+      std::memcpy(&prev_unscaled, input->nodeParams.nodeParams, sizeof(prev_unscaled));
+      if (prev_unscaled != 0 && prev_unscaled != 1) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+    } else if (input->nodeParams.nodeParamsSize != 0) {
+      return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+    }
+  } else if (input->nodeParams.nodeParamsSize) {
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  }
+  const auto& data = input->inputTensors[merge ? 2 : 1].geometry;
   const unsigned long width = data.maxSizes[0], rows = data.maxSizes[1];
   const unsigned long stat_rows = (rows + 63) / 64 * 64;
   if ((width != 64 && width != 128) || !rows || rows > 4096)
@@ -419,7 +386,7 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
     output->indexSpaceGeometry[2] = 1;
     output->indexSpaceGeometry[3] = kv_heads;
     for (unsigned i = 0; i < expected_in; ++i) {
-      const bool is_data = mode == 0 ? (i == 1) : (mode == 1 ? (i == 2 || i == 5) : (i == 2));
+      const bool is_data = merge ? (i == 2 || i == 5) : (i == 1);
       auto& access = output->inputTensorAccessPattern[i];
       if (is_data) {
         if (!shape(input->inputTensors[i], DATA_F32, {width, rows, group, kv_heads}))
@@ -437,10 +404,10 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
       }
     }
     for (unsigned i = 0; i < expected_out; ++i) {
-      const bool is_data = mode == 0 ? true : (i == 2);
+      const bool is_data = !merge || (i == 2);
       auto& access = output->outputTensorAccessPattern[i];
       if (is_data) {
-        if (!shape(input->outputTensors[i], mode == 0 ? DATA_BF16 : DATA_F32,
+        if (!shape(input->outputTensors[i], merge ? DATA_F32 : DATA_BF16,
                    {width, rows, group, kv_heads}))
           return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
         mapped(access, 0, 2, width - 1, 0);
@@ -455,28 +422,19 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
         mapped(access, 2, 3, 0, 1);
       }
     }
-    output->kernel.paramsNr = 0;
-    if (mode == 2)
-      return binary(output, &_binary_attn_online_init_f32_o_start, &_binary_attn_online_init_f32_o_end);
-    if (mode == 1)
+    output->kernel.paramsNr = merge ? 1 : 0;
+    if (merge) std::memcpy(output->kernel.scalarParams, &prev_unscaled, sizeof(prev_unscaled));
+    if (merge)
       return binary(output, &_binary_attn_online_merge_f32_o_start, &_binary_attn_online_merge_f32_o_end);
     return binary(output, &_binary_attn_online_finalize_bf16_o_start, &_binary_attn_online_finalize_bf16_o_end);
   }
   const unsigned long heads = data.maxSizes[2];
   if (!heads || heads > 256) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  if (mode == 1) {
+  if (merge) {
     for (unsigned i : {0u, 1u, 3u, 4u})
       if (!shape(input->inputTensors[i], DATA_F32, {stat_rows, heads})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
     for (unsigned i : {2u, 5u})
       if (!shape(input->inputTensors[i], DATA_F32, {width, rows, heads})) return GLUE_INCOMPATIBLE_INPUT_SIZE;
-    for (unsigned i : {0u, 1u})
-      if (!shape(input->outputTensors[i], DATA_F32, {stat_rows, heads})) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
-    if (!shape(input->outputTensors[2], DATA_F32, {width, rows, heads})) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
-  } else if (mode == 2) {
-    if (!shape(input->inputTensors[0], DATA_F32, {stat_rows, heads}) ||
-        !shape(input->inputTensors[1], DATA_F32, {stat_rows, heads}) ||
-        !shape(input->inputTensors[2], DATA_F32, {width, rows, heads}))
-      return GLUE_INCOMPATIBLE_INPUT_SIZE;
     for (unsigned i : {0u, 1u})
       if (!shape(input->outputTensors[i], DATA_F32, {stat_rows, heads})) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
     if (!shape(input->outputTensors[2], DATA_F32, {width, rows, heads})) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
@@ -492,7 +450,7 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
   output->indexSpaceGeometry[2] = 1;
   for (unsigned i = 0; i < expected_in; ++i) {
     auto& access = output->inputTensorAccessPattern[i];
-    const bool is_data = mode == 0 ? (i == 1) : (mode == 1 ? (i == 2 || i == 5) : (i == 2));
+    const bool is_data = merge ? (i == 2 || i == 5) : (i == 1);
     if (is_data) {
       mapped(access, 0, 2, width - 1, 0);
       mapped(access, 1, 1, 63, 64);
@@ -504,7 +462,7 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
   }
   for (unsigned i = 0; i < expected_out; ++i) {
     auto& access = output->outputTensorAccessPattern[i];
-    const bool is_data = mode == 0 ? true : (i == 2);
+    const bool is_data = !merge || (i == 2);
     if (is_data) {
       mapped(access, 0, 2, width - 1, 0);
       mapped(access, 1, 1, 63, 64);
@@ -514,10 +472,9 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
       mapped(access, 1, 0, 0, 1);
     }
   }
-  output->kernel.paramsNr = 0;
-  if (mode == 2)
-    return binary(output, &_binary_attn_online_init_f32_o_start, &_binary_attn_online_init_f32_o_end);
-  if (mode == 1)
+  output->kernel.paramsNr = merge ? 1 : 0;
+  if (merge) std::memcpy(output->kernel.scalarParams, &prev_unscaled, sizeof(prev_unscaled));
+  if (merge)
     return binary(output, &_binary_attn_online_merge_f32_o_start, &_binary_attn_online_merge_f32_o_end);
   return binary(output, &_binary_attn_online_finalize_bf16_o_start, &_binary_attn_online_finalize_bf16_o_end);
 }

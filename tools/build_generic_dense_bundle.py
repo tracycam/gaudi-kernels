@@ -50,13 +50,10 @@ def main():
                          ("token_indices_i32", "generic_dense/token_indices_i32.c"),
                          ("cast_f32_to_bf16", "generic_dense/cast_f32_to_bf16.c"),
                          ("attn_tile_softmax_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
-                         ("attn_tile_softmax_packed_bf16", "generic_dense/attn_tile_softmax_bf16.c"),
-                         ("attn_pack_stats_f32", "generic_dense/attn_pack_stats_f32.c"),
                          ("attn_direct_softmax_bf16", "generic_dense/attn_direct_softmax_bf16.c"),
                          ("attn_tile_indices_i32", "generic_dense/attn_tile_indices_i32.c"),
                          ("attn_decode_exp_f32", "generic_dense/attn_decode_exp_f32.c"),
                          ("attn_decode_normalize_bf16", "generic_dense/attn_decode_normalize_bf16.c"),
-                         ("attn_online_init_f32", "generic_dense/attn_online_init_f32.c"),
                          ("attn_online_merge_f32", "generic_dense/attn_online_merge_f32.c"),
                          ("attn_online_finalize_bf16", "generic_dense/attn_online_finalize_bf16.c"),
                          ("index_put_i64", "generic_dense/index_put_i64.c"),
@@ -76,8 +73,6 @@ def main():
         flags = []
         if name == "fp8_block_reduce":
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
-        elif name == "attn_tile_softmax_packed_bf16":
-            flags = ["-DPACKED_STATS=1"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
@@ -86,8 +81,6 @@ def main():
             "kv_store_bf16": kv_prefix + [b"tensor key_pool", b"tensor value_pool"],
             "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
-            "attn_online_init_f32": [b"tensor tile_max", b"tensor tile_sum", b"tensor tile_output",
-                                     b"tensor new_max", b"tensor new_sum", b"tensor new_output"],
             "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_block_reduce": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                  b"tensor bias", b"tensor output"],
