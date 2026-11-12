@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Per-128-column power-of-2 block scale (>= max_g |scales[g, block]| / 64, or 1.0f if max == 0)
-// for 1K FP16 + 2K FP8_143 block-FP8 prefill.
+// for SRAM-bundled 1K FP16 block-FP8 prefill.
 #include "activation_quant_common.h"
 
 void main(tensor scales, tensor blk_scale, int tile_tag) {

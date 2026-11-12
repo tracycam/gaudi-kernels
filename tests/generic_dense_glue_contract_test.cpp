@@ -213,28 +213,19 @@ int main(int argc, char** argv) {
                  {tensor(DATA_BF16, {256, 128})}, {tensor(DATA_F32, {1, 128})}, nullptr);
     check_kernel(instantiate, layouts, "gk_fp8_weight_blk_scale_f32_v1",
                  {tensor(DATA_F32, {2, 4})}, {tensor(DATA_F32, {1, 4})}, nullptr);
-    check_kernel(instantiate, layouts, "gk_fp8_prequant_act_bf16_v1",
-                 {tensor(DATA_BF16, {256, 128}), tensor(DATA_F32, {1, 128})},
-                 {tensor(DATA_BF16, {128, 128, 2}), tensor(DATA_F32, {1, 128, 2})}, nullptr);
     check_kernel(instantiate, layouts, "gk_fp8_quant_act_fp16_1k_v1",
-                 {tensor(DATA_BF16, {128, 128, 2}), tensor(DATA_F32, {1, 128, 2})},
+                 {tensor(DATA_BF16, {256, 128}), tensor(DATA_F32, {1, 128})},
                  {tensor(DATA_F16, {256, 128})}, nullptr);
-    check_kernel(instantiate, layouts, "gk_fp8_quant_act_fp8_3k_v1",
-                 {tensor(DATA_BF16, {128, 128, 2}), tensor(DATA_F32, {1, 128, 2})},
-                 {tensor(DATA_F8_143, {768, 128})}, nullptr);
     check_kernel(instantiate, layouts, "gk_fp8_dequant_weight_fp16_1k_v1",
                  {tensor(DATA_F8_143, {128, 512, 2}), tensor(DATA_F32, {2, 4}), tensor(DATA_F32, {1, 4})},
                  {tensor(DATA_F16, {256, 512})}, nullptr);
-    check_kernel(instantiate, layouts, "gk_fp8_dequant_weight_fp8_3k_v1",
-                 {tensor(DATA_F8_143, {128, 512, 2}), tensor(DATA_F32, {2, 4}), tensor(DATA_F32, {1, 4})},
-                 {tensor(DATA_F8_143, {768, 512})}, nullptr);
-    check_kernel(instantiate, layouts, "gk_fp8_hybrid_epilogue_bf16_v1",
-                 {tensor(DATA_F32, {512, 128}), tensor(DATA_F32, {512, 128}),
-                  tensor(DATA_F32, {1, 128}), tensor(DATA_F32, {1, 4})},
+    check_kernel(instantiate, layouts, "gk_fp8_epilogue_bf16_v1",
+                 {tensor(DATA_F32, {512, 128}), tensor(DATA_F32, {1, 128}),
+                  tensor(DATA_F32, {1, 4})},
                  {tensor(DATA_BF16, {512, 128})}, nullptr);
-    check_kernel(instantiate, layouts, "gk_fp8_hybrid_epilogue_bias_bf16_v1",
-                 {tensor(DATA_F32, {512, 128}), tensor(DATA_F32, {512, 128}),
-                  tensor(DATA_F32, {1, 128}), tensor(DATA_F32, {1, 4}), tensor(DATA_F32, {512})},
+    check_kernel(instantiate, layouts, "gk_fp8_epilogue_bias_bf16_v1",
+                 {tensor(DATA_F32, {512, 128}), tensor(DATA_F32, {1, 128}),
+                  tensor(DATA_F32, {1, 4}), tensor(DATA_F32, {512})},
                  {tensor(DATA_BF16, {512, 128})}, nullptr);
     {
       const auto get_guids = reinterpret_cast<pfnGetKernelGuids>(dlsym(library, "GetKernelGuids"));

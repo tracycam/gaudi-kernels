@@ -69,20 +69,15 @@ def main():
                          ("fp8_channel_finish", "block_fp8_framework/channel_finish.c"),
                          ("fp8_act_row_scale", "block_fp8_framework/act_row_scale_f32.c"),
                          ("fp8_weight_blk_scale", "block_fp8_framework/weight_blk_scale_f32.c"),
-                         ("fp8_prequant_act", "block_fp8_framework/prequant_act_bf16.c"),
                          ("fp8_quant_act_1k", "block_fp8_framework/quant_act_fp16_1k.c"),
-                         ("fp8_quant_act_3k", "block_fp8_framework/quant_act_fp16_1k.c"),
                          ("fp8_dequant_weight_1k", "block_fp8_framework/dequant_weight_fp16_1k.c"),
-                         ("fp8_dequant_weight_3k", "block_fp8_framework/dequant_weight_fp16_1k.c"),
-                         ("fp8_hybrid_epilogue", "block_fp8_framework/hybrid_epilogue_bf16.c"),
-                         ("fp8_hybrid_epilogue_bias", "block_fp8_framework/hybrid_epilogue_bias_bf16.c")):
+                         ("fp8_epilogue", "block_fp8_framework/epilogue_bf16.c"),
+                         ("fp8_epilogue_bias", "block_fp8_framework/epilogue_bias_bf16.c")):
         flags = []
         if name == "fp8_block_reduce":
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
         elif name == "attn_tile_softmax_packed_bf16":
             flags = ["-DPACKED_STATS=1"]
-        elif name in ("fp8_quant_act_3k", "fp8_dequant_weight_3k"):
-            flags = ["-DRESIDUAL_FP8_3K=1"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
@@ -101,18 +96,13 @@ def main():
                                    b"tensor bias", b"tensor output"],
             "fp8_act_row_scale": [b"tensor input", b"tensor row_scale", b"int tile_tag"],
             "fp8_weight_blk_scale": [b"tensor scales", b"tensor blk_scale", b"int tile_tag"],
-            "fp8_prequant_act": [b"tensor input", b"tensor row_scale", b"tensor q_out",
-                                 b"tensor s_norm", b"int tile_tag"],
-            "fp8_quant_act_1k": [b"tensor q_in", b"tensor s_norm", b"tensor output", b"int tile_tag"],
-            "fp8_quant_act_3k": [b"tensor q_in", b"tensor s_norm", b"tensor output", b"int tile_tag"],
+            "fp8_quant_act_1k": [b"tensor input", b"tensor row_scale", b"tensor output",
+                                 b"int col_offset", b"int tile_tag"],
             "fp8_dequant_weight_1k": [b"tensor input", b"tensor scales", b"tensor blk_scale",
                                       b"tensor output", b"int tile_tag"],
-            "fp8_dequant_weight_3k": [b"tensor input", b"tensor scales", b"tensor blk_scale",
-                                      b"tensor output", b"int tile_tag"],
-            "fp8_hybrid_epilogue": [b"tensor c0", b"tensor c1", b"tensor row_scale",
-                                    b"tensor blk_scale", b"tensor output"],
-            "fp8_hybrid_epilogue_bias": [b"tensor c0", b"tensor c1", b"tensor row_scale",
-                                         b"tensor blk_scale", b"tensor bias", b"tensor output"],
+            "fp8_epilogue": [b"tensor c0", b"tensor row_scale", b"tensor blk_scale", b"tensor output"],
+            "fp8_epilogue_bias": [b"tensor c0", b"tensor row_scale", b"tensor blk_scale",
+                                  b"tensor bias", b"tensor output"],
         }
         if name in contracts:
             verify_tpc_abi(out / f"{name}.o", root / f"csrc/tpc/{source}", contracts[name])

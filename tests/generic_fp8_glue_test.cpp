@@ -172,35 +172,52 @@ int main(int argc, char** argv) {
           throw std::runtime_error(std::string("FP8 hybrid ELF rejected: ") + guid);
       };
 
-      Tensor t_in{}, t_rs{}, t_q2{}, t_sn2{}, t_q3{}, t_sn3{}, t_a1k{}, t_a3k{};
-      Tensor t_w{}, t_ws{}, t_bs{}, t_w1k{}, t_w3k{}, t_c0{}, t_cp{}, t_bias{}, t_out{};
+      Tensor t_in{}, t_in_wide{}, t_rs{}, t_a1k{};
+      Tensor t_w{}, t_ws{}, t_bs{}, t_w1k{}, t_c0{}, t_bias{}, t_out{};
       shape(t_in, DATA_BF16, {256, rows});
+      shape(t_in_wide, DATA_BF16, {512, rows});
       shape(t_rs, DATA_F32, {1, rows});
-      shape(t_q2, DATA_BF16, {128, rows, 2});
-      shape(t_sn2, DATA_F32, {1, rows, 2});
-      shape(t_q3, DATA_BF16, {128, rows, 3});
-      shape(t_sn3, DATA_F32, {1, rows, 3});
       shape(t_a1k, DATA_F16, {256, rows});
-      shape(t_a3k, DATA_F8_143, {1536, rows});
       shape(t_w, DATA_F8_143, {128, 512, 3});
       shape(t_ws, DATA_F32, {3, 4});
       shape(t_bs, DATA_F32, {1, 4});
       shape(t_w1k, DATA_F16, {384, 512});
-      shape(t_w3k, DATA_F8_143, {1536, 512});
       shape(t_c0, DATA_F32, {512, rows});
-      shape(t_cp, DATA_F32, {512, rows});
       shape(t_bias, DATA_F32, {512});
       shape(t_out, DATA_BF16, {512, rows});
 
       check_multi("gk_fp8_act_row_scale_f32_v1", {t_in}, {t_rs}, 2, (rows + 15) / 16);
       check_multi("gk_fp8_weight_blk_scale_f32_v1", {t_ws}, {t_bs}, 2, 1);
-      check_multi("gk_fp8_prequant_act_bf16_v1", {t_in, t_rs}, {t_q2, t_sn2}, 3, 1);
-      check_multi("gk_fp8_quant_act_fp16_1k_v1", {t_q2, t_sn2}, {t_a1k}, 3, 1);
-      check_multi("gk_fp8_quant_act_fp8_3k_v1", {t_q3, t_sn3}, {t_a3k}, 3, 1);
+      check_multi("gk_fp8_quant_act_fp16_1k_v1", {t_in, t_rs}, {t_a1k}, 3, 1);
       check_multi("gk_fp8_dequant_weight_fp16_1k_v1", {t_w, t_ws, t_bs}, {t_w1k}, 3, 3);
-      check_multi("gk_fp8_dequant_weight_fp8_3k_v1", {t_w, t_ws, t_bs}, {t_w3k}, 3, 2);
-      check_multi("gk_fp8_hybrid_epilogue_bf16_v1", {t_c0, t_cp, t_rs, t_bs}, {t_out}, 3, 1);
-      check_multi("gk_fp8_hybrid_epilogue_bias_bf16_v1", {t_c0, t_cp, t_rs, t_bs, t_bias}, {t_out}, 3, 1);
+      check_multi("gk_fp8_epilogue_bf16_v1", {t_c0, t_rs, t_bs}, {t_out}, 3, 1);
+      check_multi("gk_fp8_epilogue_bias_bf16_v1", {t_c0, t_rs, t_bs, t_bias}, {t_out}, 3, 1);
+
+      {
+        int32_t qa_params[2]{256, 3};
+        params = {};
+        instance = {};
+        std::memset(in_access, 0, sizeof(in_access));
+        std::memset(out_access, 0, sizeof(out_access));
+        std::strcpy(params.guid.name, "gk_fp8_quant_act_fp16_1k_v1");
+        inputs[0] = t_in_wide;
+        inputs[1] = t_rs;
+        outputs[0] = t_a1k;
+        params.inputTensorNr = 2;
+        params.outputTensorNr = 1;
+        params.inputTensors = inputs;
+        params.outputTensors = outputs;
+        params.nodeParams.nodeParams = qa_params;
+        params.nodeParams.nodeParamsSize = sizeof(qa_params);
+        instance.inputTensorAccessPattern = in_access;
+        instance.outputTensorAccessPattern = out_access;
+        if (instantiate(&params, &instance) != GLUE_INSUFFICIENT_ELF_BUFFER ||
+            in_access[0].mapping[0].start_b != 256 || in_access[0].mapping[0].end_b != 767)
+          throw std::runtime_error("chunked quant_act_1k col_offset rejected");
+        qa_params[0] = 384;  // 384 + 256 > 512 -> must fail fast
+        if (instantiate(&params, &instance) != GLUE_INCOMPATIBLE_INPUT_SIZE)
+          throw std::runtime_error("out-of-bounds quant_act_1k col_offset accepted");
+      }
     }
     dlclose(library);
     std::cout << "FP8 Glue geometry, unique axes, ELF and invalid inputs passed\n";

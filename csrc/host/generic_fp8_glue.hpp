@@ -9,13 +9,10 @@ extern "C" unsigned char _binary_fp8_token_quant_o_start, _binary_fp8_token_quan
 extern "C" unsigned char _binary_fp8_channel_finish_o_start, _binary_fp8_channel_finish_o_end;
 extern "C" unsigned char _binary_fp8_act_row_scale_o_start, _binary_fp8_act_row_scale_o_end;
 extern "C" unsigned char _binary_fp8_weight_blk_scale_o_start, _binary_fp8_weight_blk_scale_o_end;
-extern "C" unsigned char _binary_fp8_prequant_act_o_start, _binary_fp8_prequant_act_o_end;
 extern "C" unsigned char _binary_fp8_quant_act_1k_o_start, _binary_fp8_quant_act_1k_o_end;
-extern "C" unsigned char _binary_fp8_quant_act_3k_o_start, _binary_fp8_quant_act_3k_o_end;
 extern "C" unsigned char _binary_fp8_dequant_weight_1k_o_start, _binary_fp8_dequant_weight_1k_o_end;
-extern "C" unsigned char _binary_fp8_dequant_weight_3k_o_start, _binary_fp8_dequant_weight_3k_o_end;
-extern "C" unsigned char _binary_fp8_hybrid_epilogue_o_start, _binary_fp8_hybrid_epilogue_o_end;
-extern "C" unsigned char _binary_fp8_hybrid_epilogue_bias_o_start, _binary_fp8_hybrid_epilogue_bias_o_end;
+extern "C" unsigned char _binary_fp8_epilogue_o_start, _binary_fp8_epilogue_o_end;
+extern "C" unsigned char _binary_fp8_epilogue_bias_o_start, _binary_fp8_epilogue_bias_o_end;
 
 namespace generic_fp8 {
 using namespace tpc_lib_api;
@@ -26,13 +23,10 @@ constexpr const char* kTokenQuant = "gk_fp8_token_quant_bf16_v1";
 constexpr const char* kChannelFinish = "gk_fp8_channel_finish_bf16_v1";
 constexpr const char* kActRowScale = "gk_fp8_act_row_scale_f32_v1";
 constexpr const char* kWeightBlkScale = "gk_fp8_weight_blk_scale_f32_v1";
-constexpr const char* kPrequantAct = "gk_fp8_prequant_act_bf16_v1";
 constexpr const char* kQuantAct1k = "gk_fp8_quant_act_fp16_1k_v1";
-constexpr const char* kQuantAct3k = "gk_fp8_quant_act_fp8_3k_v1";
 constexpr const char* kDequantWeight1k = "gk_fp8_dequant_weight_fp16_1k_v1";
-constexpr const char* kDequantWeight3k = "gk_fp8_dequant_weight_fp8_3k_v1";
-constexpr const char* kHybridEpilogue = "gk_fp8_hybrid_epilogue_bf16_v1";
-constexpr const char* kHybridEpilogueBias = "gk_fp8_hybrid_epilogue_bias_bf16_v1";
+constexpr const char* kEpilogue = "gk_fp8_epilogue_bf16_v1";
+constexpr const char* kEpilogueBias = "gk_fp8_epilogue_bias_bf16_v1";
 
 inline GlueCodeReturn instantiate_token_quant(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
@@ -162,6 +156,28 @@ inline GlueCodeReturn parse_tile_tag(const HabanaKernelParams* input, int32_t& t
   return tile_tag >= 0 ? GLUE_SUCCESS : GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
 }
 
+inline GlueCodeReturn parse_quant_act_params(const HabanaKernelParams* input,
+                                             int32_t& col_offset, int32_t& tile_tag) {
+  col_offset = 0;
+  tile_tag = 0;
+  if (input->nodeParams.nodeParamsSize == 0) return GLUE_SUCCESS;
+  if (!input->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  if (input->nodeParams.nodeParamsSize == sizeof(int32_t)) {
+    std::memcpy(&tile_tag, input->nodeParams.nodeParams, sizeof(int32_t));
+    return tile_tag >= 0 ? GLUE_SUCCESS : GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  }
+  if (input->nodeParams.nodeParamsSize == 2 * sizeof(int32_t)) {
+    int32_t raw[2]{};
+    std::memcpy(raw, input->nodeParams.nodeParams, sizeof(raw));
+    col_offset = raw[0];
+    tile_tag = raw[1];
+    return (col_offset >= 0 && col_offset % 128 == 0 && tile_tag >= 0)
+               ? GLUE_SUCCESS
+               : GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  }
+  return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+}
+
 inline GlueCodeReturn instantiate_act_row_scale(HabanaKernelParams* input,
                                                 HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
@@ -214,82 +230,50 @@ inline GlueCodeReturn instantiate_weight_blk_scale(HabanaKernelParams* input,
                                    &_binary_fp8_weight_blk_scale_o_end);
 }
 
-inline GlueCodeReturn instantiate_prequant_act(HabanaKernelParams* input,
+inline GlueCodeReturn instantiate_quant_act_1k(HabanaKernelParams* input,
                                                HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
-  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  int32_t tile_tag = 0;
-  if (auto rc = parse_tile_tag(input, tile_tag); rc != GLUE_SUCCESS) return rc;
-  const auto& x = input->inputTensors[0].geometry;
-  const auto width = x.maxSizes[0], rows = x.maxSizes[1];
-  const auto groups = width / 128;
-  const auto pairs = (groups + 1) / 2;
-  if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
-      !generic_attention::shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
-      !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
-      !generic_attention::shape(input->outputTensors[0], DATA_BF16, {128, rows, groups}) ||
-      !generic_attention::shape(input->outputTensors[1], DATA_F32, {1, rows, groups}))
-    return GLUE_INCOMPATIBLE_INPUT_SIZE;
-  output->indexSpaceRank = 3;
-  output->indexSpaceGeometry[0] = pairs;
-  output->indexSpaceGeometry[1] = (rows + 15) / 16;
-  output->indexSpaceGeometry[2] = 1;
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 0, 255, 256);
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, 15, 16);
-  generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 2, 0, 0);
-  generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, 15, 16);
-  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 2, 127, 0);
-  generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, 15, 16);
-  generic_attention::mapped(output->outputTensorAccessPattern[0], 2, 0, 1, 2);
-  generic_attention::mapped(output->outputTensorAccessPattern[1], 0, 2, 0, 0);
-  generic_attention::mapped(output->outputTensorAccessPattern[1], 1, 1, 15, 16);
-  generic_attention::mapped(output->outputTensorAccessPattern[1], 2, 0, 1, 2);
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &tile_tag, sizeof(tile_tag));
-  return generic_attention::binary(output, &_binary_fp8_prequant_act_o_start,
-                                   &_binary_fp8_prequant_act_o_end);
-}
-
-inline GlueCodeReturn instantiate_quant_act_hybrid(HabanaKernelParams* input,
-                                                   HabanaKernelInstantiation* output,
-                                                   bool is_3k) {
-  if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  int32_t tile_tag = 0;
-  if (auto rc = parse_tile_tag(input, tile_tag); rc != GLUE_SUCCESS) return rc;
-  const auto& q = input->inputTensors[0].geometry;
-  const auto rows = q.maxSizes[1], groups = q.maxSizes[2];
-  const auto pairs = (groups + 1) / 2;
-  const auto out_w = is_3k ? pairs * 768 : groups * 128;
-  if (!rows || rows > 4096 || !groups || out_w > INT_MAX ||
-      !generic_attention::shape(input->inputTensors[0], DATA_BF16, {128, rows, groups}) ||
-      !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows, groups}) ||
-      !generic_attention::shape(input->outputTensors[0], is_3k ? DATA_F8_143 : DATA_F16, {out_w, rows}))
+  int32_t col_offset = 0, tile_tag = 0;
+  if (auto rc = parse_quant_act_params(input, col_offset, tile_tag); rc != GLUE_SUCCESS)
+    return rc;
+  const auto& x = input->inputTensors[0].geometry;
+  const auto& y = input->outputTensors[0].geometry;
+  const auto in_width = x.maxSizes[0], rows = x.maxSizes[1];
+  const auto out_width = y.maxSizes[0];
+  const auto out_groups = out_width / 128;
+  if (!in_width || in_width > INT_MAX - 512 || in_width % 128 ||
+      !out_width || out_width > in_width || out_width % 128 ||
+      static_cast<uint64_t>(col_offset) + out_width > in_width ||
+      !rows || rows > 4096 ||
+      !generic_attention::shape(input->inputTensors[0], DATA_BF16, {in_width, rows}) ||
+      !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
+      !generic_attention::shape(input->outputTensors[0], DATA_F16, {out_width, rows}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   output->indexSpaceRank = 3;
-  output->indexSpaceGeometry[0] = is_3k ? (pairs + 1) / 2 : (groups + 3) / 4;
+  output->indexSpaceGeometry[0] = (out_groups + 3) / 4;
   output->indexSpaceGeometry[1] = (rows + 15) / 16;
   output->indexSpaceGeometry[2] = 1;
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 2, 127, 0);
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, 15, 16);
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 2, 0, 3, 4);
+  auto& in_access = output->inputTensorAccessPattern[0];
+  in_access.allRequired = 0;
+  in_access.mapping[0].indexSpaceDim = 0;
+  in_access.mapping[0].a = 512;
+  in_access.mapping[0].start_b = col_offset;
+  in_access.mapping[0].end_b = col_offset + 511;
+  generic_attention::mapped(in_access, 1, 1, 15, 16);
   generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 2, 0, 0);
   generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, 15, 16);
-  generic_attention::mapped(output->inputTensorAccessPattern[1], 2, 0, 3, 4);
-  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0,
-                            is_3k ? 1535 : 511, is_3k ? 1536 : 512);
+  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, 511, 512);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, 15, 16);
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &tile_tag, sizeof(tile_tag));
-  return is_3k ? generic_attention::binary(output, &_binary_fp8_quant_act_3k_o_start,
-                                           &_binary_fp8_quant_act_3k_o_end)
-               : generic_attention::binary(output, &_binary_fp8_quant_act_1k_o_start,
-                                           &_binary_fp8_quant_act_1k_o_end);
+  output->kernel.paramsNr = 2;
+  const int32_t scalars[2]{col_offset, tile_tag};
+  std::memcpy(output->kernel.scalarParams, scalars, sizeof(scalars));
+  return generic_attention::binary(output, &_binary_fp8_quant_act_1k_o_start,
+                                   &_binary_fp8_quant_act_1k_o_end);
 }
 
-inline GlueCodeReturn instantiate_dequant_weight_hybrid(HabanaKernelParams* input,
-                                                        HabanaKernelInstantiation* output,
-                                                        bool is_3k) {
+inline GlueCodeReturn instantiate_dequant_weight_1k(HabanaKernelParams* input,
+                                                    HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 3) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   int32_t tile_tag = 0;
@@ -297,50 +281,45 @@ inline GlueCodeReturn instantiate_dequant_weight_hybrid(HabanaKernelParams* inpu
   const auto& w = input->inputTensors[0].geometry;
   const auto width = w.maxSizes[1], groups = w.maxSizes[2];
   const auto blocks = width / 128;
-  const auto pairs = (groups + 1) / 2;
-  const auto out_w = is_3k ? pairs * 768 : groups * 128;
+  const auto out_w = groups * 128;
   if (!width || width > INT_MAX - 128 || width % 128 || !groups || out_w > INT_MAX ||
       !generic_attention::shape(input->inputTensors[0], DATA_F8_143, {128, width, groups}) ||
       !generic_attention::shape(input->inputTensors[1], DATA_F32, {groups, blocks}) ||
       !generic_attention::shape(input->inputTensors[2], DATA_F32, {1, blocks}) ||
-      !generic_attention::shape(input->outputTensors[0], is_3k ? DATA_F8_143 : DATA_F16, {out_w, width}))
+      !generic_attention::shape(input->outputTensors[0], DATA_F16, {out_w, width}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   output->indexSpaceRank = 3;
-  output->indexSpaceGeometry[0] = is_3k ? pairs : groups;
+  output->indexSpaceGeometry[0] = groups;
   output->indexSpaceGeometry[1] = blocks;
   output->indexSpaceGeometry[2] = 1;
   generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 2, 127, 0);
   generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, 127, 128);
-  generic_attention::mapped(output->inputTensorAccessPattern[0], 2, 0, is_3k ? 1 : 0, is_3k ? 2 : 1);
-  generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 0, is_3k ? 1 : 0, is_3k ? 2 : 1);
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 2, 0, 0, 1);
+  generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 0, 0, 1);
   generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, 0, 1);
   generic_attention::mapped(output->inputTensorAccessPattern[2], 0, 2, 0, 0);
   generic_attention::mapped(output->inputTensorAccessPattern[2], 1, 1, 0, 1);
-  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0,
-                            is_3k ? 767 : 127, is_3k ? 768 : 128);
+  generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, 127, 128);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, 127, 128);
   output->kernel.paramsNr = 1;
   std::memcpy(output->kernel.scalarParams, &tile_tag, sizeof(tile_tag));
-  return is_3k ? generic_attention::binary(output, &_binary_fp8_dequant_weight_3k_o_start,
-                                           &_binary_fp8_dequant_weight_3k_o_end)
-               : generic_attention::binary(output, &_binary_fp8_dequant_weight_1k_o_start,
-                                           &_binary_fp8_dequant_weight_1k_o_end);
+  return generic_attention::binary(output, &_binary_fp8_dequant_weight_1k_o_start,
+                                   &_binary_fp8_dequant_weight_1k_o_end);
 }
 
-inline GlueCodeReturn instantiate_hybrid_epilogue(HabanaKernelParams* input,
-                                                  HabanaKernelInstantiation* output,
-                                                  bool has_bias) {
-  if (input->inputTensorNr != (has_bias ? 5u : 4u)) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+inline GlueCodeReturn instantiate_epilogue(HabanaKernelParams* input,
+                                           HabanaKernelInstantiation* output,
+                                           bool has_bias) {
+  if (input->inputTensorNr != (has_bias ? 4u : 3u)) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& p = input->inputTensors[0].geometry;
   const auto width = p.maxSizes[0], rows = p.maxSizes[1];
   if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 4096 ||
       !generic_attention::shape(input->inputTensors[0], DATA_F32, {width, rows}) ||
-      !generic_attention::shape(input->inputTensors[1], DATA_F32, {width, rows}) ||
-      !generic_attention::shape(input->inputTensors[2], DATA_F32, {1, rows}) ||
-      !generic_attention::shape(input->inputTensors[3], DATA_F32, {1, width / 128}) ||
-      (has_bias && !generic_attention::shape(input->inputTensors[4], DATA_F32, {width})) ||
+      !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
+      !generic_attention::shape(input->inputTensors[2], DATA_F32, {1, width / 128}) ||
+      (has_bias && !generic_attention::shape(input->inputTensors[3], DATA_F32, {width})) ||
       !generic_attention::shape(input->outputTensors[0], DATA_BF16, {width, rows}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   constexpr unsigned kBlockTile = 4;
@@ -351,23 +330,21 @@ inline GlueCodeReturn instantiate_hybrid_epilogue(HabanaKernelParams* input,
   output->indexSpaceGeometry[0] = (blocks + kBlockTile - 1) / kBlockTile;
   output->indexSpaceGeometry[1] = (rows + kRowTile - 1) / kRowTile;
   output->indexSpaceGeometry[2] = 1;
-  for (unsigned i = 0; i < 2; ++i) {
-    generic_attention::mapped(output->inputTensorAccessPattern[i], 0, 0, kColTile - 1, kColTile);
-    generic_attention::mapped(output->inputTensorAccessPattern[i], 1, 1, kRowTile - 1, kRowTile);
-  }
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 0, 0, kColTile - 1, kColTile);
+  generic_attention::mapped(output->inputTensorAccessPattern[0], 1, 1, kRowTile - 1, kRowTile);
+  generic_attention::mapped(output->inputTensorAccessPattern[1], 0, 2, 0, 0);
+  generic_attention::mapped(output->inputTensorAccessPattern[1], 1, 1, kRowTile - 1, kRowTile);
   generic_attention::mapped(output->inputTensorAccessPattern[2], 0, 2, 0, 0);
-  generic_attention::mapped(output->inputTensorAccessPattern[2], 1, 1, kRowTile - 1, kRowTile);
-  generic_attention::mapped(output->inputTensorAccessPattern[3], 0, 2, 0, 0);
-  generic_attention::mapped(output->inputTensorAccessPattern[3], 1, 0, kBlockTile - 1, kBlockTile);
+  generic_attention::mapped(output->inputTensorAccessPattern[2], 1, 0, kBlockTile - 1, kBlockTile);
   if (has_bias)
-    generic_attention::mapped(output->inputTensorAccessPattern[4], 0, 0, kColTile - 1, kColTile);
+    generic_attention::mapped(output->inputTensorAccessPattern[3], 0, 0, kColTile - 1, kColTile);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 0, 0, kColTile - 1, kColTile);
   generic_attention::mapped(output->outputTensorAccessPattern[0], 1, 1, kRowTile - 1, kRowTile);
   output->kernel.paramsNr = 0;
   return has_bias
-             ? generic_attention::binary(output, &_binary_fp8_hybrid_epilogue_bias_o_start,
-                                         &_binary_fp8_hybrid_epilogue_bias_o_end)
-             : generic_attention::binary(output, &_binary_fp8_hybrid_epilogue_o_start,
-                                         &_binary_fp8_hybrid_epilogue_o_end);
+             ? generic_attention::binary(output, &_binary_fp8_epilogue_bias_o_start,
+                                         &_binary_fp8_epilogue_bias_o_end)
+             : generic_attention::binary(output, &_binary_fp8_epilogue_o_start,
+                                         &_binary_fp8_epilogue_o_end);
 }
 }  // namespace generic_fp8

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Per-row power-of-2 activation scale (>= max_col |x[col, row]| / 16384, or 1.0f if row == 0)
-// for 1K FP16 + 2K FP8_143 block-FP8 prefill.
+// for SRAM-bundled 1K FP16 block-FP8 prefill.
 #include "activation_quant_common.h"
 
 void main(tensor input, tensor row_scale, int tile_tag) {
