@@ -43,7 +43,14 @@ def main():
                          ("kv_store_bf16", "generic_dense/kv_store_bf16.c"),
                          ("kv_store_head_major_bf16", "generic_dense/kv_store_head_major_bf16.c"),
                          ("kv_store_head_major64_bf16", "generic_dense/kv_store_head_major64_bf16.c"),
+                         ("kv_store_head_major256_bf16", "generic_dense/kv_store_head_major256_bf16.c"),
                          ("rotary_bf16", "generic_dense/rotary_bf16.c"),
+                         ("rotary_pos_bf16", "generic_dense/rotary_pos_bf16.c"),
+                         ("ewise_unary_bf16", "generic_dense/ewise_unary.c"),
+                         ("ewise_unary_f32", "generic_dense/ewise_unary.c"),
+                         ("gelu_and_mul_bf16", "generic_dense/gelu_and_mul_bf16.c"),
+                         ("sample_vocab_bf16", "generic_dense/sample_vocab.c"),
+                         ("sample_vocab_f32", "generic_dense/sample_vocab.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
                          ("paged_alloc_i32", "generic_dense/paged_alloc_i32.c"),
                          ("paged_free_i32", "generic_dense/paged_free_i32.c"),
@@ -73,14 +80,33 @@ def main():
         flags = []
         if name == "fp8_block_reduce":
             flags = ["-DROWS=4", "-DOUTPUT_BF16=1"]
+        elif name == "ewise_unary_bf16":
+            flags = ["-DEWISE_BF16"]
+        elif name == "sample_vocab_bf16":
+            flags = ["-DSAMPLE_BF16"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
         kv_prefix = [b"tensor key", b"tensor value", b"tensor locations", b"tensor metadata"]
+        ewise_abi = [b"tensor input", b"tensor output", b"int op_code", b"float alpha", b"float beta"]
+        sample_abi = [b"tensor logits", b"tensor temperatures", b"tensor top_ps", b"tensor top_ks",
+                      b"tensor min_ps", b"tensor seeds", b"tensor output_ids",
+                      b"int vocab_size", b"int nan_to_neg_inf"]
         contracts = {
             "kv_store_bf16": kv_prefix + [b"tensor key_pool", b"tensor value_pool"],
             "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
+            "kv_store_head_major256_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
+            "rotary_pos_bf16": [b"tensor query", b"tensor key", b"tensor positions", b"tensor cache",
+                                b"tensor query_out", b"tensor key_out",
+                                b"int head_dim", b"int rotary_dim", b"int is_neox"],
+            "ewise_unary_bf16": ewise_abi,
+            "ewise_unary_f32": ewise_abi,
+            "gelu_and_mul_bf16": [b"tensor input", b"tensor output", b"int approximate"],
+            "sample_vocab_bf16": sample_abi,
+            "sample_vocab_f32": sample_abi,
+            "paged_free_i32": [b"tensor indices", b"tensor metadata", b"tensor seen_bitset",
+                               b"tensor pages", b"tensor result_count", b"int page_size"],
             "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
             "fp8_block_reduce": [b"tensor partial", b"tensor activation_scales", b"tensor weight_scales",
                                  b"tensor bias", b"tensor output"],

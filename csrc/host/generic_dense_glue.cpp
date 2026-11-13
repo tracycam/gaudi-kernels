@@ -15,6 +15,12 @@ extern "C" unsigned char _binary_rms_norm_bf16_o_start, _binary_rms_norm_bf16_o_
 extern "C" unsigned char _binary_silu_and_mul_bf16_o_start, _binary_silu_and_mul_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_bf16_o_start, _binary_kv_store_bf16_o_end;
 extern "C" unsigned char _binary_rotary_bf16_o_start, _binary_rotary_bf16_o_end;
+extern "C" unsigned char _binary_rotary_pos_bf16_o_start, _binary_rotary_pos_bf16_o_end;
+extern "C" unsigned char _binary_ewise_unary_bf16_o_start, _binary_ewise_unary_bf16_o_end;
+extern "C" unsigned char _binary_ewise_unary_f32_o_start, _binary_ewise_unary_f32_o_end;
+extern "C" unsigned char _binary_gelu_and_mul_bf16_o_start, _binary_gelu_and_mul_bf16_o_end;
+extern "C" unsigned char _binary_sample_vocab_bf16_o_start, _binary_sample_vocab_bf16_o_end;
+extern "C" unsigned char _binary_sample_vocab_f32_o_start, _binary_sample_vocab_f32_o_end;
 extern "C" unsigned char _binary_paged_metadata_i32_o_start, _binary_paged_metadata_i32_o_end;
 extern "C" unsigned char _binary_token_indices_i32_o_start, _binary_token_indices_i32_o_end;
 extern "C" unsigned char _binary_paged_alloc_i32_o_start, _binary_paged_alloc_i32_o_end;
@@ -32,6 +38,12 @@ constexpr const char* kNorm = "gk_rms_norm_bf16_v1";
 constexpr const char* kSilu = "gk_silu_and_mul_bf16_v1";
 constexpr const char* kKvStore = "gk_kv_store_bf16_v1";
 constexpr const char* kRotary = "gk_rotary_bf16_v1";
+constexpr const char* kRotaryPos = "gk_rotary_pos_bf16_v1";
+constexpr const char* kEwiseUnaryBf16 = "gk_ewise_unary_bf16_v1";
+constexpr const char* kEwiseUnaryF32 = "gk_ewise_unary_f32_v1";
+constexpr const char* kGeluAndMul = "gk_gelu_and_mul_bf16_v1";
+constexpr const char* kSampleVocabBf16 = "gk_sample_vocab_bf16_v1";
+constexpr const char* kSampleVocabF32 = "gk_sample_vocab_f32_v1";
 constexpr const char* kPagedMetadata = "gk_paged_metadata_i32_v1";
 constexpr const char* kTokenIndices = "gk_token_indices_i32_v1";
 constexpr const char* kSchedulerMetadata = "gk_scheduler_metadata_i32_v1";
@@ -80,6 +92,13 @@ int kind(const char* name) {
   if (std::strcmp(name, generic_attention::kDecodeNormalize) == 0) return 21;
   if (std::strcmp(name, generic_attention::kDirectSoftmax) == 0) return 22;
   if (std::strcmp(name, generic_attention::kTileIndices) == 0) return 23;
+  if (std::strcmp(name, kRotaryPos) == 0) return 42;
+  if (std::strcmp(name, kEwiseUnaryBf16) == 0) return 43;
+  if (std::strcmp(name, kEwiseUnaryF32) == 0) return 44;
+  if (std::strcmp(name, kGeluAndMul) == 0) return 45;
+  if (std::strcmp(name, kSampleVocabBf16) == 0) return 46;
+  if (std::strcmp(name, kSampleVocabF32) == 0) return 47;
+  if (std::strcmp(name, generic_attention::kHeadStore256) == 0) return 48;
   return -1;
 }
 
@@ -149,11 +168,18 @@ GlueCodeReturn instantiate_norm(HabanaKernelParams* input, HabanaKernelInstantia
   const unsigned gamma = inputs - 1;
   if (input->inputTensorNr != inputs) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != outputs) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize != sizeof(float) || !input->nodeParams.nodeParams)
+  struct NormParams {
+    float epsilon = 0.0f;
+    float weight_offset = 0.0f;
+  } params{};
+  if (!input->nodeParams.nodeParams ||
+      (input->nodeParams.nodeParamsSize != sizeof(float) &&
+       input->nodeParams.nodeParamsSize != sizeof(NormParams)))
     return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  float epsilon;
-  std::memcpy(&epsilon, input->nodeParams.nodeParams, sizeof(epsilon));
-  if (!std::isfinite(epsilon) || epsilon <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&params, input->nodeParams.nodeParams, input->nodeParams.nodeParamsSize);
+  if (!std::isfinite(params.epsilon) || params.epsilon <= 0.0f ||
+      !std::isfinite(params.weight_offset))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& shape = input->inputTensors[0].geometry;
   if (shape.dims != 2 || !shape.maxSizes[0] || shape.maxSizes[0] > 8192 ||
       !shape.maxSizes[1] || shape.maxSizes[1] > INT_MAX)
@@ -185,8 +211,8 @@ GlueCodeReturn instantiate_norm(HabanaKernelParams* input, HabanaKernelInstantia
       access.mapping[1].end_b = 0;
     }
   }
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &epsilon, sizeof(epsilon));
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
   auto* start = fused ? &_binary_fused_add_rms_norm_bf16_o_start : &_binary_rms_norm_bf16_o_start;
   auto* end = fused ? &_binary_fused_add_rms_norm_bf16_o_end : &_binary_rms_norm_bf16_o_end;
   const unsigned size = static_cast<unsigned>(end - start);
@@ -252,7 +278,7 @@ GlueCodeReturn instantiate_kv_store(HabanaKernelParams* input, HabanaKernelInsta
       input->outputTensors[1].geometry.dataType != DATA_BF16)
     return GLUE_INCOMPATIBLE_DATA_TYPE;
   if (key.dims != 2 || !key.maxSizes[0] || key.maxSizes[0] > INT_MAX || key.maxSizes[0] % 128 ||
-      !key.maxSizes[1] || key.maxSizes[1] > 4096 || key.minSizes[0] != key.maxSizes[0] ||
+      !key.maxSizes[1] || key.maxSizes[1] > 8192 || key.minSizes[0] != key.maxSizes[0] ||
       key.minSizes[1] != key.maxSizes[1] || value.dims != 2 ||
       value.maxSizes[0] != key.maxSizes[0] || value.maxSizes[1] != key.maxSizes[1] ||
       value.minSizes[0] != value.maxSizes[0] || value.minSizes[1] != value.maxSizes[1] ||
@@ -317,7 +343,7 @@ GlueCodeReturn instantiate_rotary(HabanaKernelParams* input, HabanaKernelInstant
       input->outputTensors[1].geometry.dataType != DATA_BF16) return GLUE_INCOMPATIBLE_DATA_TYPE;
   for (const auto* tensor : {&query, &key}) {
     if (tensor->dims != 2 || !tensor->maxSizes[0] || tensor->maxSizes[0] > INT_MAX ||
-        tensor->maxSizes[0] % params.head_dim || !tensor->maxSizes[1] || tensor->maxSizes[1] > 4096 ||
+        tensor->maxSizes[0] % params.head_dim || !tensor->maxSizes[1] || tensor->maxSizes[1] > 8192 ||
         tensor->minSizes[0] != tensor->maxSizes[0] || tensor->minSizes[1] != tensor->maxSizes[1])
       return GLUE_INCOMPATIBLE_INPUT_SIZE;
   }
@@ -349,6 +375,191 @@ GlueCodeReturn instantiate_rotary(HabanaKernelParams* input, HabanaKernelInstant
   return GLUE_SUCCESS;
 }
 
+GlueCodeReturn instantiate_rotary_pos(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 4) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 2) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  struct Params { int32_t head_dim; int32_t rotary_dim; int32_t is_neox; } params{};
+  if (input->nodeParams.nodeParamsSize != sizeof(params) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&params, input->nodeParams.nodeParams, sizeof(params));
+  if (params.head_dim <= 0 || params.rotary_dim <= 0 || params.rotary_dim > params.head_dim ||
+      params.rotary_dim % 2 || (params.is_neox != 0 && params.is_neox != 1))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& query = input->inputTensors[0].geometry;
+  const auto& key = input->inputTensors[1].geometry;
+  const auto& positions = input->inputTensors[2].geometry;
+  const auto& cache = input->inputTensors[3].geometry;
+  if (query.dataType != DATA_BF16 || key.dataType != DATA_BF16 || cache.dataType != DATA_BF16 ||
+      positions.dataType != DATA_I32 ||
+      input->outputTensors[0].geometry.dataType != DATA_BF16 ||
+      input->outputTensors[1].geometry.dataType != DATA_BF16) return GLUE_INCOMPATIBLE_DATA_TYPE;
+  for (const auto* tensor : {&query, &key}) {
+    if (tensor->dims != 2 || !tensor->maxSizes[0] || tensor->maxSizes[0] > INT_MAX ||
+        tensor->maxSizes[0] % params.head_dim || !tensor->maxSizes[1] || tensor->maxSizes[1] > INT_MAX ||
+        tensor->minSizes[0] != tensor->maxSizes[0] || tensor->minSizes[1] != tensor->maxSizes[1])
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
+  if (key.maxSizes[1] != query.maxSizes[1] || positions.dims != 1 ||
+      positions.maxSizes[0] != query.maxSizes[1] || positions.minSizes[0] != positions.maxSizes[0] ||
+      cache.dims != 2 || cache.maxSizes[0] != static_cast<unsigned>(params.rotary_dim) ||
+      cache.minSizes[0] != cache.maxSizes[0] || !cache.maxSizes[1] || cache.maxSizes[1] > INT_MAX ||
+      !cache.minSizes[1] || cache.minSizes[1] > cache.maxSizes[1]) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  for (unsigned i = 0; i < 2; ++i) {
+    const auto& source = input->inputTensors[i].geometry;
+    const auto& result = input->outputTensors[i].geometry;
+    if (result.dims != 2 || result.maxSizes[0] != source.maxSizes[0] ||
+        result.maxSizes[1] != source.maxSizes[1] || result.minSizes[0] != result.maxSizes[0] ||
+        result.minSizes[1] != result.maxSizes[1]) return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  }
+  const unsigned long total_heads =
+      query.maxSizes[0] / params.head_dim + key.maxSizes[0] / params.head_dim;
+  const unsigned long rows = query.maxSizes[1];
+  const unsigned long cores = (rows >= 24 || total_heads >= 24)
+                                  ? 24UL
+                                  : std::min<unsigned long>(24UL, rows * total_heads);
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = std::max<unsigned long>(1UL, cores);
+  for (unsigned i = 0; i < 4; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+  for (unsigned i = 0; i < 2; ++i) output->outputTensorAccessPattern[i].allRequired = 1;
+  output->kernel.paramsNr = 3;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
+  return generic_attention::binary(output, &_binary_rotary_pos_bf16_o_start,
+                                   &_binary_rotary_pos_bf16_o_end);
+}
+
+GlueCodeReturn instantiate_ewise_unary(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                       bool is_bf16) {
+  if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  struct Params {
+    int32_t op_code;
+    float alpha;
+    float beta;
+  } params{};
+  if (input->nodeParams.nodeParamsSize != sizeof(params) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&params, input->nodeParams.nodeParams, sizeof(params));
+  if (params.op_code < 0 || params.op_code > 11 ||
+      std::isnan(params.alpha) || std::isnan(params.beta) ||
+      (params.op_code == 6 && (!std::isfinite(params.alpha) || params.alpha == 0.0f)))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto dtype = is_bf16 ? DATA_BF16 : DATA_F32;
+  const auto& src = input->inputTensors[0].geometry;
+  const auto& dst = input->outputTensors[0].geometry;
+  if (src.dataType != dtype || dst.dataType != dtype) return GLUE_INCOMPATIBLE_DATA_TYPE;
+  if (src.dims != 2 || !src.maxSizes[0] || src.maxSizes[0] > INT_MAX ||
+      !src.maxSizes[1] || src.maxSizes[1] > INT_MAX ||
+      src.minSizes[0] != src.maxSizes[0] || src.minSizes[1] != src.maxSizes[1])
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (dst.dims != 2 || dst.maxSizes[0] != src.maxSizes[0] || dst.maxSizes[1] != src.maxSizes[1] ||
+      dst.minSizes[0] != dst.maxSizes[0] || dst.minSizes[1] != dst.maxSizes[1])
+    return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  const unsigned long step = is_bf16 ? 128UL : 64UL;
+  const unsigned long chunks = (src.maxSizes[0] + step - 1) / step;
+  const unsigned long cores = src.maxSizes[1] >= 24
+                                  ? 24UL
+                                  : std::min<unsigned long>(24UL, src.maxSizes[1] * chunks);
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = std::max<unsigned long>(1UL, cores);
+  output->inputTensorAccessPattern[0].allRequired = 1;
+  output->outputTensorAccessPattern[0].allRequired = 1;
+  output->kernel.paramsNr = 3;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
+  return is_bf16
+      ? generic_attention::binary(output, &_binary_ewise_unary_bf16_o_start,
+                                  &_binary_ewise_unary_bf16_o_end)
+      : generic_attention::binary(output, &_binary_ewise_unary_f32_o_start,
+                                  &_binary_ewise_unary_f32_o_end);
+}
+
+GlueCodeReturn instantiate_gelu_and_mul(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
+  if (input->inputTensorNr != 1) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  int32_t approximate = 0;
+  if (input->nodeParams.nodeParamsSize == sizeof(approximate)) {
+    if (!input->nodeParams.nodeParams) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+    std::memcpy(&approximate, input->nodeParams.nodeParams, sizeof(approximate));
+    if (approximate != 0 && approximate != 1) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  } else if (input->nodeParams.nodeParamsSize != 0) {
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  }
+  const auto& source = input->inputTensors[0].geometry;
+  const auto& result = input->outputTensors[0].geometry;
+  if (source.dataType != DATA_BF16 || result.dataType != DATA_BF16) return GLUE_INCOMPATIBLE_DATA_TYPE;
+  if (source.dims != 2 || !source.maxSizes[0] || source.maxSizes[0] > INT_MAX ||
+      source.maxSizes[0] % 2 || !source.maxSizes[1] || source.maxSizes[1] > INT_MAX ||
+      source.minSizes[0] != source.maxSizes[0] || source.minSizes[1] != source.maxSizes[1])
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  const auto width = source.maxSizes[0] / 2;
+  if (result.dims != 2 || result.maxSizes[0] != width || result.maxSizes[1] != source.maxSizes[1] ||
+      result.minSizes[0] != result.maxSizes[0] || result.minSizes[1] != result.maxSizes[1])
+    return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  const unsigned long chunks = (width + 127) / 128;
+  const unsigned long cores = source.maxSizes[1] >= 24
+                                  ? 24UL
+                                  : std::min<unsigned long>(24UL, source.maxSizes[1] * chunks);
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = std::max<unsigned long>(1UL, cores);
+  output->inputTensorAccessPattern[0].allRequired = 1;
+  output->outputTensorAccessPattern[0].allRequired = 1;
+  output->kernel.paramsNr = 1;
+  std::memcpy(output->kernel.scalarParams, &approximate, sizeof(approximate));
+  return generic_attention::binary(output, &_binary_gelu_and_mul_bf16_o_start,
+                                   &_binary_gelu_and_mul_bf16_o_end);
+}
+
+GlueCodeReturn instantiate_sample_vocab(HabanaKernelParams* input, HabanaKernelInstantiation* output,
+                                        bool is_bf16) {
+  if (input->inputTensorNr != 6) return GLUE_INCOMPATIBLE_INPUT_COUNT;
+  if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
+  struct Params {
+    int32_t vocab_size;
+    int32_t nan_to_neg_inf;
+  } params{};
+  if (input->nodeParams.nodeParamsSize != sizeof(params) || !input->nodeParams.nodeParams)
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  std::memcpy(&params, input->nodeParams.nodeParams, sizeof(params));
+  if (params.vocab_size <= 0 || (params.nan_to_neg_inf != 0 && params.nan_to_neg_inf != 1))
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  const auto& logits = input->inputTensors[0].geometry;
+  const auto& out = input->outputTensors[0].geometry;
+  const auto logits_type = is_bf16 ? DATA_BF16 : DATA_F32;
+  if (logits.dataType != logits_type ||
+      input->inputTensors[1].geometry.dataType != DATA_F32 ||
+      input->inputTensors[2].geometry.dataType != DATA_F32 ||
+      input->inputTensors[3].geometry.dataType != DATA_I32 ||
+      input->inputTensors[4].geometry.dataType != DATA_F32 ||
+      input->inputTensors[5].geometry.dataType != DATA_I32 ||
+      out.dataType != DATA_I32)
+    return GLUE_INCOMPATIBLE_DATA_TYPE;
+  if (logits.dims != 2 || !logits.maxSizes[0] || logits.maxSizes[0] > INT_MAX ||
+      !logits.maxSizes[1] || logits.maxSizes[1] > INT_MAX ||
+      logits.minSizes[0] != logits.maxSizes[0] || logits.minSizes[1] != logits.maxSizes[1] ||
+      static_cast<unsigned long>(params.vocab_size) > logits.maxSizes[0])
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  const auto rows = logits.maxSizes[1];
+  for (unsigned i = 1; i <= 4; ++i) {
+    if (!generic_attention::shape(input->inputTensors[i],
+                                  i == 3 ? DATA_I32 : DATA_F32, {rows}))
+      return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  }
+  if (!generic_attention::shape(input->inputTensors[5], DATA_I32, {2, rows}))
+    return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (!generic_attention::shape(input->outputTensors[0], DATA_I32, {rows}))
+    return GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+  output->indexSpaceRank = 1;
+  output->indexSpaceGeometry[0] = std::min<unsigned long>(24UL, rows);
+  for (unsigned i = 0; i < 6; ++i) output->inputTensorAccessPattern[i].allRequired = 1;
+  output->outputTensorAccessPattern[0].allRequired = 1;
+  output->kernel.paramsNr = 2;
+  std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
+  return is_bf16
+      ? generic_attention::binary(output, &_binary_sample_vocab_bf16_o_start,
+                                  &_binary_sample_vocab_bf16_o_end)
+      : generic_attention::binary(output, &_binary_sample_vocab_f32_o_start,
+                                  &_binary_sample_vocab_f32_o_end);
+}
+
 GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKernelInstantiation* output,
                                           bool scheduler_owned) {
   if (input->inputTensorNr != 6) return GLUE_INCOMPATIBLE_INPUT_COUNT;
@@ -364,7 +575,7 @@ GlueCodeReturn instantiate_paged_metadata(HabanaKernelParams* input, HabanaKerne
   }
   const auto& locations = input->inputTensors[0].geometry;
   const auto bucket = locations.maxSizes[1];
-  if (locations.dims != 2 || !bucket || bucket > 4096) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if (locations.dims != 2 || !bucket || bucket > 8192) return GLUE_INCOMPATIBLE_INPUT_SIZE;
   for (unsigned i : {0u, 1u, 2u}) {
     const auto& tensor = input->inputTensors[i].geometry;
     if (tensor.dims != 2 || (tensor.maxSizes[0] != 1 && tensor.maxSizes[0] != 2) ||
@@ -413,7 +624,7 @@ GlueCodeReturn instantiate_token_indices(HabanaKernelParams* input, HabanaKernel
   const auto bucket = tokens.maxSizes[1];
   if (tokens.dataType != DATA_I32 || header.dataType != DATA_I32 || tokens.dims != 2 ||
       (tokens.maxSizes[0] != 1 && tokens.maxSizes[0] != 2) ||
-      tokens.minSizes[0] != tokens.maxSizes[0] || !bucket || bucket > 4096 || tokens.minSizes[1] != bucket ||
+      tokens.minSizes[0] != tokens.maxSizes[0] || !bucket || bucket > 8192 || tokens.minSizes[1] != bucket ||
       header.dims != 1 || header.maxSizes[0] != 1 || header.minSizes[0] != 1)
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   for (unsigned i = 0; i < 2; ++i) {
@@ -447,7 +658,7 @@ GlueCodeReturn instantiate_cast_f32_to_bf16(HabanaKernelParams* input, HabanaKer
   const auto& result = input->outputTensors[0].geometry;
   if (source.dataType != DATA_F32 || result.dataType != DATA_BF16) return GLUE_INCOMPATIBLE_DATA_TYPE;
   if (source.dims != 2 || !source.maxSizes[0] || source.maxSizes[0] > INT_MAX ||
-      !source.maxSizes[1] || source.maxSizes[1] > 4096 ||
+      !source.maxSizes[1] || source.maxSizes[1] > 8192 ||
       source.minSizes[0] != source.maxSizes[0] || source.minSizes[1] != source.maxSizes[1])
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (result.dims != 2 || result.maxSizes[0] != source.maxSizes[0] ||
@@ -512,14 +723,14 @@ GlueCodeReturn instantiate_index_put_i64(HabanaKernelParams* input, HabanaKernel
 
 GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelInstantiation* output,
                                        bool release) {
-  const unsigned inputs = release ? 2 : 3, outputs = release ? 2 : 1;
+  const unsigned inputs = 3, outputs = release ? 2 : 1;
   if (input->inputTensorNr != inputs) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != outputs) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   int32_t page_size = 0;
   if (input->nodeParams.nodeParamsSize != sizeof(page_size) || !input->nodeParams.nodeParams)
     return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   std::memcpy(&page_size, input->nodeParams.nodeParams, sizeof(page_size));
-  if (page_size != 16 && page_size != 64) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  if (page_size <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   for (unsigned i = 0; i < inputs + outputs; ++i) {
     const auto& tensor = i < inputs ? input->inputTensors[i].geometry : input->outputTensors[i - inputs].geometry;
     if (tensor.dataType != DATA_I32) return GLUE_INCOMPATIBLE_DATA_TYPE;
@@ -533,16 +744,19 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (release) {
     const auto& metadata = input->inputTensors[1].geometry;
+    const auto& seen_bitset = input->inputTensors[2].geometry;
     const auto& count = input->outputTensors[1].geometry;
-    if (slots.maxSizes[1] > 131072 || result.maxSizes[1] != slots.maxSizes[1] ||
-        metadata.dims != 1 || metadata.maxSizes[0] != 2 || count.dims != 1 || count.maxSizes[0] != 1)
+    if (slots.maxSizes[1] > INT_MAX || result.maxSizes[1] != slots.maxSizes[1] ||
+        metadata.dims != 1 || metadata.maxSizes[0] != 3 ||
+        seen_bitset.dims != 1 || !seen_bitset.maxSizes[0] || seen_bitset.maxSizes[0] > INT_MAX ||
+        count.dims != 1 || count.maxSizes[0] != 1)
       return GLUE_INCOMPATIBLE_INPUT_SIZE;
   } else {
     const auto& pages = input->inputTensors[1].geometry;
     const auto& metadata = input->inputTensors[2].geometry;
-    if (slots.maxSizes[1] > 256 || pages.dims != 2 || pages.maxSizes[0] != 2 ||
-        pages.maxSizes[1] != 512 || metadata.dims != 2 || metadata.maxSizes[0] != 4 ||
-        metadata.maxSizes[1] != slots.maxSizes[1] || result.maxSizes[1] > 4096)
+    if (slots.maxSizes[1] > INT_MAX || pages.dims != 2 || pages.maxSizes[0] != 2 ||
+        pages.maxSizes[1] > INT_MAX || metadata.dims != 2 || metadata.maxSizes[0] != 4 ||
+        metadata.maxSizes[1] != slots.maxSizes[1] || result.maxSizes[1] > INT_MAX)
       return GLUE_INCOMPATIBLE_INPUT_SIZE;
   }
   output->indexSpaceRank = 1;
@@ -563,7 +777,7 @@ GlueCodeReturn instantiate_paged_slots(HabanaKernelParams* input, HabanaKernelIn
 
 extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidInfo* guids) {
   const uint32_t capacity = *count;
-  *count = device == DEVICE_ID_GAUDI2 ? 35 : 0;
+  *count = device == DEVICE_ID_GAUDI2 ? 42 : 0;
   if (guids && *count && capacity > 0) std::strcpy(guids[0].name, kAdd);
   if (guids && *count && capacity > 1) std::strcpy(guids[1].name, kFusedNorm);
   if (guids && *count && capacity > 2) std::strcpy(guids[2].name, kNorm);
@@ -609,6 +823,18 @@ extern "C" GlueCodeReturn GetKernelGuids(DeviceId device, uint32_t* count, GuidI
   if (guids && *count && capacity > 32) std::strcpy(guids[32].name, generic_fp8::kDequantWeight1k);
   if (guids && *count && capacity > 33) std::strcpy(guids[33].name, generic_fp8::kEpilogue);
   if (guids && *count && capacity > 34) std::strcpy(guids[34].name, generic_fp8::kEpilogueBias);
+  if (guids && *count && capacity > 35) {
+    std::strcpy(guids[35].name, kRotaryPos);
+    guids[35].nameHash.Value = 0x004eb228af48f693ULL;
+    guids[35].kernelProperties = 0;
+    guids[35].supportsDynamicShapes = 1;
+  }
+  if (guids && *count && capacity > 36) std::strcpy(guids[36].name, kEwiseUnaryBf16);
+  if (guids && *count && capacity > 37) std::strcpy(guids[37].name, kEwiseUnaryF32);
+  if (guids && *count && capacity > 38) std::strcpy(guids[38].name, kGeluAndMul);
+  if (guids && *count && capacity > 39) std::strcpy(guids[39].name, kSampleVocabBf16);
+  if (guids && *count && capacity > 40) std::strcpy(guids[40].name, kSampleVocabF32);
+  if (guids && *count && capacity > 41) std::strcpy(guids[41].name, generic_attention::kHeadStore256);
   return GLUE_SUCCESS;
 }
 
@@ -627,7 +853,7 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 16) return generic_attention::instantiate_softmax(input, output);
   if (id == 17 || id == 18)
     return generic_attention::instantiate_online(input, output, id == 17);
-  if (id == 19) return generic_attention::instantiate_head_store(input, output);
+  if (id == 19 || id == 48) return generic_attention::instantiate_head_store(input, output);
   if (id == 20 || id == 21) return generic_attention::instantiate_decode(input, output, id == 20);
   if (id == 22) return generic_attention::instantiate_direct_softmax(input, output);
   if (id == 23) return generic_attention::instantiate_tile_indices(input, output);
@@ -642,6 +868,10 @@ extern "C" GlueCodeReturn InstantiateTpcKernel(HabanaKernelParams* input,
   if (id == 36) return generic_fp8::instantiate_quant_act_1k(input, output);
   if (id == 38) return generic_fp8::instantiate_dequant_weight_1k(input, output);
   if (id == 40 || id == 41) return generic_fp8::instantiate_epilogue(input, output, id == 41);
+  if (id == 42) return instantiate_rotary_pos(input, output);
+  if (id == 43 || id == 44) return instantiate_ewise_unary(input, output, id == 43);
+  if (id == 45) return instantiate_gelu_and_mul(input, output);
+  if (id == 46 || id == 47) return instantiate_sample_vocab(input, output, id == 46);
   if (input->inputTensorNr != 2) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
   if (input->nodeParams.nodeParamsSize != 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
@@ -686,8 +916,9 @@ extern "C" GlueCodeReturn GetShapeInference(DeviceId, const ShapeInferenceParams
                                               ShapeInferenceOutput* output) {
   const int id = kind(input->pGuid ? input->pGuid->name : input->guid.name);
   if (id < 0) return GLUE_NODE_NOT_FOUND;
-  if (id == 6) {
-    if (!output || input->inputTensorsNr != 5 || input->outputTensorsNr != 2 ||
+  if (id == 6 || id == 42) {
+    const unsigned expected_in = (id == 6) ? 5u : 4u;
+    if (!output || input->inputTensorsNr != expected_in || input->outputTensorsNr != 2 ||
         !input->inputTensors || !input->inputTensors[0] || !input->inputTensors[1] ||
         !output->outputTensors || !output->outputTensors[0] || !output->outputTensors[1])
       return GLUE_INCOMPATIBLE_INPUT_COUNT;

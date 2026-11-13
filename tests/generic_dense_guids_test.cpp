@@ -46,7 +46,10 @@ int main(int argc, char** argv) {
         "gk_fp8_token_quant_bf16_v1", "gk_fp8_channel_finish_bf16_v1",
         "gk_fp8_act_row_scale_f32_v1", "gk_fp8_weight_blk_scale_f32_v1",
         "gk_fp8_quant_act_fp16_1k_v1", "gk_fp8_dequant_weight_fp16_1k_v1",
-        "gk_fp8_epilogue_bf16_v1", "gk_fp8_epilogue_bias_bf16_v1"};
+        "gk_fp8_epilogue_bf16_v1", "gk_fp8_epilogue_bias_bf16_v1",
+        "gk_rotary_pos_bf16_v1", "gk_ewise_unary_bf16_v1", "gk_ewise_unary_f32_v1",
+        "gk_gelu_and_mul_bf16_v1", "gk_sample_vocab_bf16_v1", "gk_sample_vocab_f32_v1",
+        "gk_kv_store_head_major256_bf16_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
 

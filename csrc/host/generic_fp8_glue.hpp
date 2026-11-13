@@ -34,7 +34,7 @@ inline GlueCodeReturn instantiate_token_quant(HabanaKernelParams* input, HabanaK
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& x = input->inputTensors[0].geometry;
   const auto width = x.maxSizes[0], rows = x.maxSizes[1];
-  if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX || width % 128 || !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
       !generic_attention::shape(input->outputTensors[0], DATA_F8_143, {width, rows}) ||
       !generic_attention::shape(input->outputTensors[1], DATA_F32, {1, rows}))
@@ -58,7 +58,7 @@ inline GlueCodeReturn instantiate_channel_finish(HabanaKernelParams* input, Haba
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& p = input->inputTensors[0].geometry;
   const auto width = p.maxSizes[0], rows = p.maxSizes[1];
-  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_F32, {width, rows}) ||
       !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
       !generic_attention::shape(input->inputTensors[2], DATA_F32, {width}) ||
@@ -87,7 +87,7 @@ inline GlueCodeReturn instantiate_quant(HabanaKernelParams* input, HabanaKernelI
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& x = input->inputTensors[0].geometry;
   const auto width = x.maxSizes[0], rows = x.maxSizes[1];
-  if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX || width % 128 || !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
       !generic_attention::shape(input->outputTensors[0], DATA_F8_143, {128, rows, width / 128}) ||
       !generic_attention::shape(input->outputTensors[1], DATA_F32, {1, rows, width / 128}))
@@ -114,7 +114,7 @@ inline GlueCodeReturn instantiate_reduce(HabanaKernelParams* input, HabanaKernel
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& p = input->inputTensors[0].geometry;
   const auto width = p.maxSizes[0], rows = p.maxSizes[1], groups = p.maxSizes[2];
-  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 8192 ||
       !groups || groups > INT_MAX ||
       !generic_attention::shape(input->inputTensors[0], DATA_F32, {width, rows, groups}) ||
       !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows, groups}) ||
@@ -186,7 +186,7 @@ inline GlueCodeReturn instantiate_act_row_scale(HabanaKernelParams* input,
   if (auto rc = parse_tile_tag(input, tile_tag); rc != GLUE_SUCCESS) return rc;
   const auto& x = input->inputTensors[0].geometry;
   const auto width = x.maxSizes[0], rows = x.maxSizes[1];
-  if (!width || width > INT_MAX || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX || width % 128 || !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
       !generic_attention::shape(input->outputTensors[0], DATA_F32, {1, rows}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
@@ -245,7 +245,7 @@ inline GlueCodeReturn instantiate_quant_act_1k(HabanaKernelParams* input,
   if (!in_width || in_width > INT_MAX - 512 || in_width % 128 ||
       !out_width || out_width > in_width || out_width % 128 ||
       static_cast<uint64_t>(col_offset) + out_width > in_width ||
-      !rows || rows > 4096 ||
+      !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_BF16, {in_width, rows}) ||
       !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
       !generic_attention::shape(input->outputTensors[0], DATA_F16, {out_width, rows}))
@@ -315,7 +315,7 @@ inline GlueCodeReturn instantiate_epilogue(HabanaKernelParams* input,
   if (input->nodeParams.nodeParamsSize) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& p = input->inputTensors[0].geometry;
   const auto width = p.maxSizes[0], rows = p.maxSizes[1];
-  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 4096 ||
+  if (!width || width > INT_MAX - 128 || width % 128 || !rows || rows > 8192 ||
       !generic_attention::shape(input->inputTensors[0], DATA_F32, {width, rows}) ||
       !generic_attention::shape(input->inputTensors[1], DATA_F32, {1, rows}) ||
       !generic_attention::shape(input->inputTensors[2], DATA_F32, {1, width / 128}) ||

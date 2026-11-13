@@ -13,6 +13,7 @@ extern "C" unsigned char _binary_attn_online_merge_f32_o_start, _binary_attn_onl
 extern "C" unsigned char _binary_attn_online_finalize_bf16_o_start, _binary_attn_online_finalize_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_head_major_bf16_o_start, _binary_kv_store_head_major_bf16_o_end;
 extern "C" unsigned char _binary_kv_store_head_major64_bf16_o_start, _binary_kv_store_head_major64_bf16_o_end;
+extern "C" unsigned char _binary_kv_store_head_major256_bf16_o_start, _binary_kv_store_head_major256_bf16_o_end;
 extern "C" unsigned char _binary_attn_decode_exp_f32_o_start, _binary_attn_decode_exp_f32_o_end;
 extern "C" unsigned char _binary_attn_decode_normalize_bf16_o_start, _binary_attn_decode_normalize_bf16_o_end;
 extern "C" unsigned char _binary_attn_direct_softmax_bf16_o_start, _binary_attn_direct_softmax_bf16_o_end;
@@ -24,6 +25,7 @@ constexpr const char* kSoftmax = "gk_attn_tile_softmax_bf16_v1";
 constexpr const char* kMerge = "gk_attn_online_merge_f32_v1";
 constexpr const char* kFinalize = "gk_attn_online_finalize_bf16_v1";
 constexpr const char* kHeadStore = "gk_kv_store_head_major_bf16_v1";
+constexpr const char* kHeadStore256 = "gk_kv_store_head_major256_bf16_v1";
 constexpr const char* kDecodeExp = "gk_attn_decode_exp_f32_v1";
 constexpr const char* kDecodeNormalize = "gk_attn_decode_normalize_bf16_v1";
 constexpr const char* kDirectSoftmax = "gk_attn_direct_softmax_bf16_v1";
@@ -48,6 +50,38 @@ inline void mapped(TensorAccessPattern& access, unsigned dim, unsigned space, un
   access.mapping[dim].start_b = 0;
   access.mapping[dim].end_b = end;
 }
+struct SoftmaxMaskParams {
+  float scale = 0.0f;
+  float softcap = 0.0f;
+  int32_t sliding_window = 0;
+};
+
+inline bool parse_softmax_params(const HabanaKernelParams* input, SoftmaxMaskParams& out,
+                                 bool allow_tile_16b = false) {
+  const unsigned sz = input->nodeParams.nodeParamsSize;
+  if (!input->nodeParams.nodeParams) return false;
+  out = SoftmaxMaskParams{};
+  if (allow_tile_16b && sz == 16) {
+    struct TileSoftmaxNodeParams {
+      float scale;
+      int32_t rows;
+      float softcap;
+      int32_t sliding_window;
+    } tile{};
+    std::memcpy(&tile, input->nodeParams.nodeParams, sizeof(tile));
+    out.scale = tile.scale;
+    out.softcap = tile.softcap;
+    out.sliding_window = tile.sliding_window;
+  } else if (sz == sizeof(float) || sz == 2 * sizeof(float) || sz == sizeof(SoftmaxMaskParams)) {
+    std::memcpy(&out, input->nodeParams.nodeParams, sz);
+  } else {
+    return false;
+  }
+  return std::isfinite(out.scale) && out.scale > 0.0f &&
+         std::isfinite(out.softcap) && out.softcap >= 0.0f &&
+         out.sliding_window >= -1;
+}
+
 inline GlueCodeReturn binary(HabanaKernelInstantiation* output, unsigned char* start, unsigned char* end) {
   const unsigned capacity = output->kernel.elfSize;
   output->kernel.elfSize = static_cast<unsigned>(end - start);
@@ -93,9 +127,9 @@ inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKe
   const auto& pool = input->outputTensors[0].geometry;
   const unsigned long width = source.maxSizes[0], rows = source.maxSizes[1];
   const unsigned long d = pool.maxSizes[0], capacity = pool.maxSizes[1];
-  if ((d != 64 && d != 128) || width % d) return GLUE_INCOMPATIBLE_INPUT_SIZE;
+  if ((d != 64 && d != 128 && d != 256) || width % d) return GLUE_INCOMPATIBLE_INPUT_SIZE;
   const unsigned long heads = width / d;
-  if (!heads || width % 128 || !rows || rows > 4096 || !capacity || capacity > INT_MAX ||
+  if (!heads || !rows || rows > 8192 || !capacity || capacity > INT_MAX ||
       !shape(input->inputTensors[0], DATA_BF16, {width, rows}) ||
       !shape(input->inputTensors[1], DATA_BF16, {width, rows}) ||
       !shape(input->inputTensors[2], DATA_I32, {rows}) ||
@@ -126,6 +160,9 @@ inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKe
   out.inputReusabilityBinding = 1;
   out.sparseAccess = 1;
   output->kernel.paramsNr = 0;
+  if (d == 256)
+    return binary(output, &_binary_kv_store_head_major256_bf16_o_start,
+                  &_binary_kv_store_head_major256_bf16_o_end);
   return d == 128 ? binary(output, &_binary_kv_store_head_major_bf16_o_start,
                            &_binary_kv_store_head_major_bf16_o_end)
                   : binary(output, &_binary_kv_store_head_major64_bf16_o_start,
@@ -135,11 +172,8 @@ inline GlueCodeReturn instantiate_head_store(HabanaKernelParams* input, HabanaKe
 inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 3) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 1) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize != sizeof(float) || !input->nodeParams.nodeParams)
-    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  float scale;
-  std::memcpy(&scale, input->nodeParams.nodeParams, sizeof(scale));
-  if (!std::isfinite(scale) || scale <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  SoftmaxMaskParams sp{};
+  if (!parse_softmax_params(input, sp)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& data = input->inputTensors[0].geometry;
   if (data.dims == 4) {
     const unsigned long keys = data.maxSizes[0], rows = data.maxSizes[1];
@@ -165,8 +199,8 @@ inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, Haba
     }
     mapped(output->inputTensorAccessPattern[1], 0, 1, row_end, 16);
     mapped(output->inputTensorAccessPattern[2], 0, 2, 2, 0);
-    output->kernel.paramsNr = 1;
-    std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
+    output->kernel.paramsNr = 3;
+    std::memcpy(output->kernel.scalarParams, &sp, sizeof(sp));
     return binary(output, &_binary_attn_direct_softmax_bf16_o_start,
                   &_binary_attn_direct_softmax_bf16_o_end);
   }
@@ -189,8 +223,8 @@ inline GlueCodeReturn instantiate_direct_softmax(HabanaKernelParams* input, Haba
   }
   output->inputTensorAccessPattern[1].allRequired = 1;
   output->inputTensorAccessPattern[2].allRequired = 1;
-  output->kernel.paramsNr = 1;
-  std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
+  output->kernel.paramsNr = 3;
+  std::memcpy(output->kernel.scalarParams, &sp, sizeof(sp));
   return binary(output, &_binary_attn_direct_softmax_bf16_o_start,
                 &_binary_attn_direct_softmax_bf16_o_end);
 }
@@ -201,18 +235,16 @@ inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernel
                                          bool exponent) {
   if (input->inputTensorNr != (exponent ? 3u : 2u)) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != (exponent ? 2u : 1u)) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if ((exponent && (input->nodeParams.nodeParamsSize != sizeof(float) || !input->nodeParams.nodeParams)) ||
-      (!exponent && input->nodeParams.nodeParamsSize))
-    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  float scale = 0;
+  SoftmaxMaskParams sp{};
   if (exponent) {
-    std::memcpy(&scale, input->nodeParams.nodeParams, sizeof(scale));
-    if (!std::isfinite(scale) || scale <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+    if (!parse_softmax_params(input, sp)) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
+  } else if (input->nodeParams.nodeParamsSize) {
+    return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   }
   const auto& data = input->inputTensors[0].geometry;
   const unsigned long keys = data.maxSizes[0], heads = data.maxSizes[2];
-  if (keys <= 512 || keys > 8192 || keys % 128 || !heads || heads > 256 ||
-      !shape(input->inputTensors[0], DATA_F32, {keys, 1, heads}))
+  if ((exponent ? (keys <= 512 || keys > 8192 || keys % 128) : (!keys || keys > 8192)) ||
+      !heads || heads > 256 || !shape(input->inputTensors[0], DATA_F32, {keys, 1, heads}))
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (exponent) {
     if (!shape(input->inputTensors[1], DATA_I32, {1}) ||
@@ -252,8 +284,8 @@ inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernel
       mapped(access, 2, 0, 0, 1);
     }
   }
-  output->kernel.paramsNr = exponent ? 1 : 0;
-  if (exponent) std::memcpy(output->kernel.scalarParams, &scale, sizeof(scale));
+  output->kernel.paramsNr = exponent ? 3 : 0;
+  if (exponent) std::memcpy(output->kernel.scalarParams, &sp, sizeof(sp));
   if (exponent)
     return binary(output, &_binary_attn_decode_exp_f32_o_start, &_binary_attn_decode_exp_f32_o_end);
   return binary(output, &_binary_attn_decode_normalize_bf16_o_start,
@@ -263,11 +295,9 @@ inline GlueCodeReturn instantiate_decode(HabanaKernelParams* input, HabanaKernel
 inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKernelInstantiation* output) {
   if (input->inputTensorNr != 3) return GLUE_INCOMPATIBLE_INPUT_COUNT;
   if (input->outputTensorNr != 3) return GLUE_INCOMPATIBLE_OUTPUT_COUNT;
-  if (input->nodeParams.nodeParamsSize != sizeof(float) || !input->nodeParams.nodeParams)
+  SoftmaxMaskParams sp{};
+  if (!parse_softmax_params(input, sp, /*allow_tile_16b=*/true))
     return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
-  float scale;
-  std::memcpy(&scale, input->nodeParams.nodeParams, sizeof(scale));
-  if (!std::isfinite(scale) || scale <= 0) return GLUE_UNSUPPORTED_LAYER_CONFIGURATION;
   const auto& score = input->inputTensors[0].geometry;
   if (score.dims == 4) {
     const unsigned long keys = score.maxSizes[0], rows = score.maxSizes[1];
@@ -306,8 +336,10 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
     struct SoftmaxScalarParams {
       float scale;
       int32_t block_rows;
-    } params{scale, static_cast<int32_t>(block_rows)};
-    output->kernel.paramsNr = 2;
+      float softcap;
+      int32_t sliding_window;
+    } params{sp.scale, static_cast<int32_t>(block_rows), sp.softcap, sp.sliding_window};
+    output->kernel.paramsNr = 4;
     std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
     return binary(output, &_binary_attn_tile_softmax_bf16_o_start,
                   &_binary_attn_tile_softmax_bf16_o_end);
@@ -345,8 +377,10 @@ inline GlueCodeReturn instantiate_softmax(HabanaKernelParams* input, HabanaKerne
   struct SoftmaxScalarParams {
     float scale;
     int32_t block_rows;
-  } params{scale, static_cast<int32_t>(block_rows)};
-  output->kernel.paramsNr = 2;
+    float softcap;
+    int32_t sliding_window;
+  } params{sp.scale, static_cast<int32_t>(block_rows), sp.softcap, sp.sliding_window};
+  output->kernel.paramsNr = 4;
   std::memcpy(output->kernel.scalarParams, &params, sizeof(params));
   return binary(output, &_binary_attn_tile_softmax_bf16_o_start, &_binary_attn_tile_softmax_bf16_o_end);
 }
@@ -373,7 +407,7 @@ inline GlueCodeReturn instantiate_online(HabanaKernelParams* input, HabanaKernel
   const auto& data = input->inputTensors[merge ? 2 : 1].geometry;
   const unsigned long width = data.maxSizes[0], rows = data.maxSizes[1];
   const unsigned long stat_rows = (rows + 63) / 64 * 64;
-  if ((width != 64 && width != 128) || !rows || rows > 4096)
+  if ((width != 64 && width != 128 && width != 256) || !rows || rows > 8192)
     return GLUE_INCOMPATIBLE_INPUT_SIZE;
   if (data.dims == 4) {
     const unsigned long group = data.maxSizes[2], kv_heads = data.maxSizes[3];

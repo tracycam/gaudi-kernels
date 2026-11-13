@@ -37,6 +37,18 @@ void main(tensor sums, tensor accumulator, tensor result) {
             float128 pair = {a * r, b * r};
             v_bf16_st_tnsr(p, result, convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE));
           }
+        } else if (width == 256) {
+          for (; item < last; ++item) {
+            float64 r = v_broadcast_element_f32(inverse, item);
+            int5 p0 = {0, first + item, head, kv_h, 0};
+            int5 p1 = {64, first + item, head, kv_h, 0};
+            int5 p2 = {128, first + item, head, kv_h, 0};
+            int5 p3 = {192, first + item, head, kv_h, 0};
+            float128 pair0 = {v_f32_ld_tnsr_b(p0, accumulator) * r, v_f32_ld_tnsr_b(p1, accumulator) * r};
+            float128 pair1 = {v_f32_ld_tnsr_b(p2, accumulator) * r, v_f32_ld_tnsr_b(p3, accumulator) * r};
+            v_bf16_st_tnsr(p0, result, convert_float128_to_bfloat128(pair0, SW_LINEAR | SW_RHNE));
+            v_bf16_st_tnsr(p2, result, convert_float128_to_bfloat128(pair1, SW_LINEAR | SW_RHNE));
+          }
         } else {
           for (; item < last; ++item) {
             float64 r = v_broadcast_element_f32(inverse, item);

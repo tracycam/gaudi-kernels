@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "norm_math.h"
 
-void main(tensor x, tensor gamma, tensor norm_out, float epsilon) {
+void main(tensor x, tensor gamma, tensor norm_out, float epsilon, float weight_offset) {
   const int width = get_dim_size(x, 0);
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   bfloat128 saved[64];
@@ -22,7 +22,10 @@ void main(tensor x, tensor gamma, tensor norm_out, float epsilon) {
         int5 pos = {k, row, 0, 0, 0}, g = {k, 0, 0, 0, 0};
         float128 value = v_convert_bf16_to_f32_all_b(saved[k >> 7]);
         float128 weight = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_b(g, gamma));
-        float128 normalized = {value.v1 * inverse * weight.v1, value.v2 * inverse * weight.v2};
+        float128 normalized = {
+            value.v1 * inverse * (weight.v1 + weight_offset),
+            value.v2 * inverse * (weight.v2 + weight_offset),
+        };
         v_bf16_st_tnsr(pos, norm_out, convert_float128_to_bfloat128(normalized, SW_RHNE));
       }
     }
@@ -44,7 +47,10 @@ void main(tensor x, tensor gamma, tensor norm_out, float epsilon) {
       int count = s_i32_min(width - k, 128) - 1;
       float128 value = v_convert_bf16_to_f32_all_b(saved[k / 128]);
       float128 weight = v_convert_bf16_to_f32_all_b(v_bf16_ld_tnsr_partial_b(g, gamma, (char)count, 0));
-      float128 normalized = {value.v1 * inverse * weight.v1, value.v2 * inverse * weight.v2};
+      float128 normalized = {
+          value.v1 * inverse * (weight.v1 + weight_offset),
+          value.v2 * inverse * (weight.v2 + weight_offset),
+      };
       v_bf16_st_tnsr_partial(pos, norm_out, convert_float128_to_bfloat128(normalized, SW_RHNE), (char)count, 0);
     }
   }

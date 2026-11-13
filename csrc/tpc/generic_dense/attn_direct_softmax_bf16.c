@@ -6,7 +6,7 @@
 // Uses 2-row tensor-load pipelining across all key buckets {128, 256, 384, 512}
 // with 2-FMA Cody-Waite expf and 3-step Newton-Raphson rcp (0 SFU LUTs).
 void main(tensor scores, tensor positions, tensor header,
-          tensor probabilities, float scale) {
+          tensor probabilities, float scale, float softcap, int sliding_window) {
   int5 begin = get_index_space_offset(), end = begin + get_index_space_size();
   int5 h0 = {0, 0, 0, 0, 0}, h1 = {1, 0, 0, 0, 0}, h2 = {2, 0, 0, 0, 0};
   const int valid_rows = s_i32_ld_g(gen_addr(h0, header));
@@ -16,7 +16,9 @@ void main(tensor scores, tensor positions, tensor header,
   const int max_key_blocks = s_i32_max(0, s_i32_min(keys, (valid_keys + 127) & ~127));
   const uint64 lanes = read_lane_id_4b_b();
   const float ni = -1.0f / 0.0f;
+  const int plain_causal = (softcap <= 0.0f && sliding_window <= 0);
 
+  if (plain_causal) {
   for (int kv_h = begin[3]; kv_h < end[3]; ++kv_h) {
     for (int head = begin[0]; head < end[0]; ++head) {
       for (int block = begin[1]; block < end[1]; ++block) {
@@ -301,6 +303,108 @@ void main(tensor scores, tensor positions, tensor header,
             for (int i = 0; i < keys; i += 128) {
               p[0] = i;
               v_bf16_st_tnsr(p, probabilities, (bfloat128)0.f);
+            }
+          }
+        }
+      }
+    }
+  }
+  } else {
+    const int has_softcap = (softcap > 0.0f);
+    const float pre_scale = has_softcap ? (scale / softcap) : scale;
+    const int max_groups = keys >> 7;
+
+    for (int kv_h = begin[3]; kv_h < end[3]; ++kv_h) {
+      for (int head = begin[0]; head < end[0]; ++head) {
+        for (int block = begin[1]; block < end[1]; ++block) {
+          const int first = block * 16;
+          const int last = s_i32_min(rows, first + 16);
+          for (int row = first; row < last; ++row) {
+            int5 p = {0, row, head, kv_h, 0};
+            if (row < valid_rows && max_key_blocks > 0) {
+              int5 pc = {row, 0, 0, 0, 0};
+              const int pos = s_i32_ld_g(gen_addr(pc, positions));
+              const int first_key = (sliding_window > 0) ? s_i32_max(0, pos - sliding_window + 1 - key_start) : 0;
+              const int last_key = s_i32_min(valid_keys - 1, pos - key_start);
+              if (first_key <= last_key) {
+                const int start_g = first_key >> 7;
+                const int end_g = s_i32_min(max_groups, (last_key >> 7) + 1);
+                const unsigned int win_len = (unsigned int)(last_key - first_key + 1);
+                float64 max0 = ni, max1 = ni;
+                float64 v0 = 0.f, v1 = 0.f, v2 = 0.f, v3 = 0.f, v4 = 0.f, v5 = 0.f, v6 = 0.f, v7 = 0.f;
+
+                #pragma clang loop unroll(disable)
+                for (int g = start_g; g < end_g; ++g) {
+                  const int base = g << 7;
+                  p[0] = base;      float64 x0 = v_f32_ld_tnsr_b(p, scores);
+                  p[0] = base + 64; float64 x1 = v_f32_ld_tnsr_b(p, scores);
+                  if (has_softcap) {
+                    x0 = softcap * tpc_tanh_f32_safe(x0 * pre_scale);
+                    x1 = softcap * tpc_tanh_f32_safe(x1 * pre_scale);
+                  } else {
+                    x0 = x0 * scale;
+                    x1 = x1 * scale;
+                  }
+                  if (g == 0) { v0 = x0; v1 = x1; }
+                  else if (g == 1) { v2 = x0; v3 = x1; }
+                  else if (g == 2) { v4 = x0; v5 = x1; }
+                  else { v6 = x0; v7 = x1; }
+                  max0 = v_f32_max_b(max0, v_f32_sel_less_u32_b((uint64)((int64)lanes + (base - first_key)), win_len, x0, ni));
+                  max1 = v_f32_max_b(max1, v_f32_sel_less_u32_b((uint64)((int64)lanes + (base + 64 - first_key)), win_len, x1, ni));
+                }
+
+                float64 maximum = v_f32_reduce_max(v_f32_max_b(max0, max1));
+                float64 sum0 = 0.f, sum1 = 0.f;
+
+                #pragma clang loop unroll(disable)
+                for (int g = start_g; g < end_g; ++g) {
+                  const int base = g << 7;
+                  float64 x0 = (g < 2) ? ((g == 0) ? v0 : v2) : ((g == 2) ? v4 : v6);
+                  float64 x1 = (g < 2) ? ((g == 0) ? v1 : v3) : ((g == 2) ? v5 : v7);
+                  float64 e0, e1;
+                  TPC_EXP_NEG_F32_PAIR(x0 - maximum, x1 - maximum, e0, e1);
+                  e0 = v_f32_sel_eq_f32_b(maximum, ni, 0.f, e0);
+                  e1 = v_f32_sel_eq_f32_b(maximum, ni, 0.f, e1);
+                  e0 = v_f32_sel_less_u32_b((uint64)((int64)lanes + (base - first_key)), win_len, e0, 0.f);
+                  e1 = v_f32_sel_less_u32_b((uint64)((int64)lanes + (base + 64 - first_key)), win_len, e1, 0.f);
+                  sum0 += e0;
+                  sum1 += e1;
+                  if (g == 0) { v0 = e0; v1 = e1; }
+                  else if (g == 1) { v2 = e0; v3 = e1; }
+                  else if (g == 2) { v4 = e0; v5 = e1; }
+                  else { v6 = e0; v7 = e1; }
+                }
+
+                float64 sum = v_f32_reduce_add(sum0 + sum1);
+                float64 inverse = tpc_rcp_nonneg_f32(sum);
+
+                for (int g = 0; g < start_g; ++g) {
+                  p[0] = g << 7;
+                  v_bf16_st_tnsr(p, probabilities, (bfloat128)0.f);
+                }
+                #pragma clang loop unroll(disable)
+                for (int g = start_g; g < end_g; ++g) {
+                  p[0] = g << 7;
+                  float64 x0 = (g < 2) ? ((g == 0) ? v0 : v2) : ((g == 2) ? v4 : v6);
+                  float64 x1 = (g < 2) ? ((g == 0) ? v1 : v3) : ((g == 2) ? v5 : v7);
+                  float128 pair = {x0 * inverse, x1 * inverse};
+                  v_bf16_st_tnsr(p, probabilities, convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE));
+                }
+                for (int g = end_g; g < max_groups; ++g) {
+                  p[0] = g << 7;
+                  v_bf16_st_tnsr(p, probabilities, (bfloat128)0.f);
+                }
+              } else {
+                for (int i = 0; i < keys; i += 128) {
+                  p[0] = i;
+                  v_bf16_st_tnsr(p, probabilities, (bfloat128)0.f);
+                }
+              }
+            } else {
+              for (int i = 0; i < keys; i += 128) {
+                p[0] = i;
+                v_bf16_st_tnsr(p, probabilities, (bfloat128)0.f);
+              }
             }
           }
         }

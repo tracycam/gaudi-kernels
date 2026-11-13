@@ -68,9 +68,11 @@ void main(tensor old_max, tensor old_sum, tensor old_output,
         } else {
           for (; item < last; ++item) {
             float64 aa = v_broadcast_element_f32(wa, item), bb = v_broadcast_element_f32(wb, item);
-            int5 p = {0, first + item, head, kv_h, 0};
-            float64 x = v_f32_ld_tnsr_b(p, old_output), y = v_f32_ld_tnsr_b(p, tile_output);
-            v_f32_st_tnsr(p, new_output, aa * x + bb * y);
+            for (int col = 0; col < width; col += 64) {
+              int5 p = {col, first + item, head, kv_h, 0};
+              float64 x = v_f32_ld_tnsr_b(p, old_output), y = v_f32_ld_tnsr_b(p, tile_output);
+              v_f32_st_tnsr(p, new_output, aa * x + bb * y);
+            }
           }
         }
       }

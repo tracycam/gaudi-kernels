@@ -20,11 +20,18 @@ void main(tensor exponent, tensor sums, tensor result) {
       p[0] = i + 128; v_bf16_st_tnsr(p, result, convert_float128_to_bfloat128(pair1, SW_LINEAR | SW_RHNE));
     }
     for (; i < keys; i += 128) {
+      const int rem = s_i32_min(128, keys - i);
       int5 p = {i, 0, head, 0, 0};
-      float64 a = v_f32_ld_tnsr_b(p, exponent) * inv; p[0] = i + 64;
-      float64 b = v_f32_ld_tnsr_b(p, exponent) * inv; p[0] = i;
+      float64 a = v_f32_ld_tnsr_partial_b(p, exponent, (char)(s_i32_min(64, rem) - 1), 0) * inv;
+      float64 b = 0.f;
+      if (rem > 64) {
+        p[0] = i + 64;
+        b = v_f32_ld_tnsr_partial_b(p, exponent, (char)(rem - 65), 0) * inv;
+        p[0] = i;
+      }
       float128 pair = {a, b};
-      v_bf16_st_tnsr(p, result, convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE));
+      v_bf16_st_tnsr_partial(p, result, convert_float128_to_bfloat128(pair, SW_LINEAR | SW_RHNE),
+                             (char)(rem - 1), 0);
     }
   }
 }
