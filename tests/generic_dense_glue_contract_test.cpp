@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
                     tensor(DATA_I32, {4}), tensor(DATA_I32, {3}),
                     tensor(DATA_BF16, {64, 2 * 1024 * 3})},
                    {tensor(DATA_BF16, {64, 2 * 1024 * 3})}, nullptr, true);
-      check_kernel(instantiate, layouts, "gk_kv_store_head_major256_bf16_v1",
+      check_kernel(instantiate, layouts, "gk_kv_store_head_major_bf16_v1",
                    {tensor(DATA_BF16, {512, 4}), tensor(DATA_BF16, {512, 4}),
                     tensor(DATA_I32, {4}), tensor(DATA_I32, {3}),
                     tensor(DATA_BF16, {256, 2 * 1024 * 2})},

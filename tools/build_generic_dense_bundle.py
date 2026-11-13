@@ -40,7 +40,6 @@ def main():
                          ("fused_add_rms_norm_bf16", "generic_dense/fused_add_rms_norm_bf16.c"),
                          ("rms_norm_bf16", "generic_dense/rms_norm_bf16.c"),
                          ("silu_and_mul_bf16", "generic_dense/silu_and_mul_bf16.c"),
-                         ("kv_store_bf16", "generic_dense/kv_store_bf16.c"),
                          ("kv_store_head_major_bf16", "generic_dense/kv_store_head_major_bf16.c"),
                          ("kv_store_head_major64_bf16", "generic_dense/kv_store_head_major64_bf16.c"),
                          ("kv_store_head_major256_bf16", "generic_dense/kv_store_head_major256_bf16.c"),
@@ -93,7 +92,6 @@ def main():
                       b"tensor min_ps", b"tensor seeds", b"tensor output_ids",
                       b"int vocab_size", b"int nan_to_neg_inf"]
         contracts = {
-            "kv_store_bf16": kv_prefix + [b"tensor key_pool", b"tensor value_pool"],
             "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major256_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],

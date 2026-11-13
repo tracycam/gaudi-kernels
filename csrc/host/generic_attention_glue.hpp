@@ -25,7 +25,6 @@ constexpr const char* kSoftmax = "gk_attn_tile_softmax_bf16_v1";
 constexpr const char* kMerge = "gk_attn_online_merge_f32_v1";
 constexpr const char* kFinalize = "gk_attn_online_finalize_bf16_v1";
 constexpr const char* kHeadStore = "gk_kv_store_head_major_bf16_v1";
-constexpr const char* kHeadStore256 = "gk_kv_store_head_major256_bf16_v1";
 constexpr const char* kDecodeExp = "gk_attn_decode_exp_f32_v1";
 constexpr const char* kDecodeNormalize = "gk_attn_decode_normalize_bf16_v1";
 constexpr const char* kDirectSoftmax = "gk_attn_direct_softmax_bf16_v1";

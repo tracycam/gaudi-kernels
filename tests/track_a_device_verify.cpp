@@ -617,7 +617,7 @@ void test_rotary_pos(SynapseCtx& ctx, std::vector<std::string>& summary) {
 void test_kv_and_attn_extensions(SynapseCtx& ctx, std::vector<std::string>& summary) {
   // 1. kv_store_head_major (d=64 with heads=3 -> width=192) & d=256 (heads=2 -> width=512)
   for (auto [guid, d, heads] : {std::tuple{"gk_kv_store_head_major_bf16_v1", 64ULL, 3ULL},
-                                std::tuple{"gk_kv_store_head_major256_bf16_v1", 256ULL, 2ULL}}) {
+                                std::tuple{"gk_kv_store_head_major_bf16_v1", 256ULL, 2ULL}}) {
     const uint64_t rows = 4, valid = 3, slots = 32;
     std::vector<uint16_t> key(heads * d * rows), val(heads * d * rows), pool(d * 2 * heads * slots, 0x3C00);
     std::vector<int32_t> locs{5, 17, 29, 3};  // row 3 >= valid should NOT be written
