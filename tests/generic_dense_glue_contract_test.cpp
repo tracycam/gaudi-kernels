@@ -112,7 +112,9 @@ int main(int argc, char** argv) {
     if (!library) throw std::runtime_error(dlerror());
     const auto instantiate = reinterpret_cast<pfnInstantiateTpcKernel>(dlsym(library, "InstantiateTpcKernel"));
     const auto layouts = reinterpret_cast<pfnGetSupportedDataLayout>(dlsym(library, "GetSupportedDataLayouts"));
-    if (!instantiate || !layouts) throw std::runtime_error("required provider entry point missing");
+    using GetShapeInfFn = GlueCodeReturn (*)(DeviceId, const ShapeInferenceParams*, ShapeInferenceOutput*);
+    const auto infer_shape = reinterpret_cast<GetShapeInfFn>(dlsym(library, "GetShapeInference"));
+    if (!instantiate || !layouts || !infer_shape) throw std::runtime_error("required provider entry point missing");
 
     const auto row = tensor(DATA_BF16, {64, 4});
     const auto gamma = tensor(DATA_BF16, {64});
@@ -496,6 +498,90 @@ int main(int argc, char** argv) {
                    {head_major_pool}, nullptr, true);
       check_kernel(instantiate, layouts, "gk_fp8_act_row_scale_f32_v1",
                    {tensor(DATA_BF16, {256, 8192})}, {tensor(DATA_F32, {1, 8192})}, nullptr);
+
+      // apply_vocab_bitmask positive & negative contracts
+      for (const char* guid : {"gk_apply_vocab_bitmask_bf16_v1", "gk_apply_vocab_bitmask_f32_v1"}) {
+        const auto dtype = std::strcmp(guid, "gk_apply_vocab_bitmask_bf16_v1") == 0 ? DATA_BF16 : DATA_F32;
+        auto call_inst = [&](std::vector<Tensor> ins, std::vector<Tensor> outs, int32_t active_cols, int32_t mask_tail) {
+          struct { int32_t active_cols; int32_t mask_tail; } bp{active_cols, mask_tail};
+          std::vector<TensorAccessPattern> ip(ins.size()), op(outs.size());
+          HabanaKernelParams p{};
+          std::strcpy(p.guid.name, guid);
+          p.inputTensorNr = ins.size(); p.outputTensorNr = outs.size();
+          p.inputTensors = ins.data(); p.outputTensors = outs.data();
+          p.nodeParams.nodeParams = &bp; p.nodeParams.nodeParamsSize = sizeof(bp);
+          HabanaKernelInstantiation inst{};
+          inst.inputTensorAccessPattern = ip.data();
+          inst.outputTensorAccessPattern = op.data();
+          return std::pair{instantiate(&p, &inst), inst.kernel.paramsNr};
+        };
+        if (auto [rc, nr] = call_inst({tensor(dtype, {166912, 8}), tensor(DATA_I32, {5216, 8})},
+                                      {tensor(dtype, {166912, 8})}, 166912, 0);
+            rc != GLUE_INSUFFICIENT_ELF_BUFFER || nr != 2)
+          throw std::runtime_error(std::string(guid) + ": valid contract failed");
+        if (call_inst({tensor(dtype, {40, 2}), tensor(DATA_I32, {1, 2})},
+                      {tensor(dtype, {40, 2})}, 32, 1).first != GLUE_INSUFFICIENT_ELF_BUFFER)
+          throw std::runtime_error(std::string(guid) + ": padded vocab contract failed");
+        if (call_inst({tensor(dtype, {40, 2}), tensor(DATA_I32, {1, 2})},
+                      {tensor(dtype, {40, 2})}, 41, 1).first != GLUE_INCOMPATIBLE_INPUT_SIZE)
+          throw std::runtime_error(std::string(guid) + ": accepted active_cols > vocab_cols");
+        if (call_inst({tensor(dtype, {40, 2}), tensor(DATA_I32, {1, 2})},
+                      {tensor(dtype, {40, 2})}, 32, 2).first != GLUE_UNSUPPORTED_LAYER_CONFIGURATION)
+          throw std::runtime_error(std::string(guid) + ": accepted invalid mask_tail");
+      }
+
+      // rank_sum positive (dynamic shapes + GetShapeInference) & negative contracts
+      for (const char* guid : {"gk_rank_sum_bf16_v1", "gk_rank_sum_f32_v1"}) {
+        const auto dtype = std::strcmp(guid, "gk_rank_sum_bf16_v1") == 0 ? DATA_BF16 : DATA_F32;
+        int32_t world_size = 4;
+        auto dyn_in = tensor(dtype, {16384});
+        dyn_in.geometry.minSizes[0] = static_cast<uint64_t>(world_size);
+        auto dyn_out = tensor(dtype, {4096});
+        dyn_out.geometry.minSizes[0] = 1;
+        check_kernel(instantiate, layouts, guid, {dyn_in}, {dyn_out}, &world_size);
+
+        TensorShapeInfo in_shape{}, out_shape{};
+        in_shape.geometry = dyn_in.geometry;
+        TensorShapeInfo* in_ptrs[1] = {&in_shape};
+        TensorShapeInfo* out_ptrs[1] = {&out_shape};
+        ShapeInferenceParams sp{};
+        std::strcpy(sp.guid.name, guid);
+        sp.pGuid = &sp.guid;
+        sp.inputTensors = in_ptrs;
+        sp.inputTensorsNr = 1;
+        sp.outputTensorsNr = 1;
+        sp.nodeParams.nodeParams = &world_size;
+        sp.nodeParams.nodeParamsSize = sizeof(world_size);
+        ShapeInferenceOutput so{};
+        so.outputTensors = out_ptrs;
+        if (infer_shape(DEVICE_ID_GAUDI2, &sp, &so) != GLUE_SUCCESS ||
+            out_shape.geometry.dims != 1 || out_shape.geometry.maxSizes[0] != 4096 ||
+            out_shape.geometry.minSizes[0] != 1)
+          throw std::runtime_error(std::string(guid) + ": GetShapeInference failed");
+        in_shape.geometry.strides[0] = 1;
+        out_shape = {};
+        if (infer_shape(DEVICE_ID_GAUDI2, &sp, &so) != GLUE_SUCCESS ||
+            out_shape.geometry.dims != 1 || out_shape.geometry.maxSizes[0] != 4096)
+          throw std::runtime_error(std::string(guid) + ": stride-union GetShapeInference failed");
+
+        auto call_rs = [&](Tensor in_t, Tensor out_t, int32_t ws) {
+          std::vector<TensorAccessPattern> ip(1), op(1);
+          HabanaKernelParams p{};
+          std::strcpy(p.guid.name, guid);
+          p.inputTensorNr = 1; p.outputTensorNr = 1;
+          p.inputTensors = &in_t; p.outputTensors = &out_t;
+          p.nodeParams.nodeParams = &ws; p.nodeParams.nodeParamsSize = sizeof(ws);
+          HabanaKernelInstantiation inst{};
+          inst.inputTensorAccessPattern = ip.data();
+          inst.outputTensorAccessPattern = op.data();
+          return instantiate(&p, &inst);
+        };
+        if (call_rs(dyn_in, dyn_out, 1) != GLUE_UNSUPPORTED_LAYER_CONFIGURATION ||
+            call_rs(dyn_in, dyn_out, 9) != GLUE_UNSUPPORTED_LAYER_CONFIGURATION)
+          throw std::runtime_error(std::string(guid) + ": accepted invalid world_size");
+        if (call_rs(tensor(dtype, {8192}), dyn_out, 4) != GLUE_INCOMPATIBLE_INPUT_SIZE)
+          throw std::runtime_error(std::string(guid) + ": accepted mismatched gathered size");
+      }
     }
     dlclose(library);
     std::cout << "generic norm and attention access axes and layouts passed\n";

@@ -27,8 +27,11 @@ int main(int argc, char** argv) {
     std::set<std::string> names;
     for (const auto& guid : guids) {
       names.emplace(guid.name);
-      if (std::strcmp(guid.name, "gk_attn_tile_indices_i32_v1") == 0 && !guid.supportsDynamicShapes)
-        throw std::runtime_error("tile-index kernel did not advertise dynamic input shapes");
+      if ((std::strcmp(guid.name, "gk_attn_tile_indices_i32_v1") == 0 ||
+           std::strcmp(guid.name, "gk_rank_sum_bf16_v1") == 0 ||
+           std::strcmp(guid.name, "gk_rank_sum_f32_v1") == 0) &&
+          !guid.supportsDynamicShapes)
+        throw std::runtime_error(std::string(guid.name) + " did not advertise dynamic input shapes");
     }
     const std::set<std::string> expected{
         "gk_add_bf16_v1", "gk_fused_add_rms_norm_bf16_v1", "gk_rms_norm_bf16_v1",
@@ -48,7 +51,9 @@ int main(int argc, char** argv) {
         "gk_fp8_quant_act_fp16_1k_v1", "gk_fp8_dequant_weight_fp16_1k_v1",
         "gk_fp8_epilogue_bf16_v1", "gk_fp8_epilogue_bias_bf16_v1",
         "gk_rotary_pos_bf16_v1", "gk_ewise_unary_bf16_v1", "gk_ewise_unary_f32_v1",
-        "gk_gelu_and_mul_bf16_v1", "gk_sample_vocab_bf16_v1", "gk_sample_vocab_f32_v1"};
+        "gk_gelu_and_mul_bf16_v1", "gk_sample_vocab_bf16_v1", "gk_sample_vocab_f32_v1",
+        "gk_apply_vocab_bitmask_bf16_v1", "gk_apply_vocab_bitmask_f32_v1",
+        "gk_rank_sum_bf16_v1", "gk_rank_sum_f32_v1"};
     if (count != expected.size() || names != expected)
       throw std::runtime_error("unexpected provider GUID set");
 

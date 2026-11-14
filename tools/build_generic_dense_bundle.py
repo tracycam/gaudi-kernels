@@ -50,6 +50,10 @@ def main():
                          ("gelu_and_mul_bf16", "generic_dense/gelu_and_mul_bf16.c"),
                          ("sample_vocab_bf16", "generic_dense/sample_vocab.c"),
                          ("sample_vocab_f32", "generic_dense/sample_vocab.c"),
+                         ("apply_vocab_bitmask_bf16", "generic_dense/apply_vocab_bitmask.c"),
+                         ("apply_vocab_bitmask_f32", "generic_dense/apply_vocab_bitmask.c"),
+                         ("rank_sum_bf16", "generic_dense/rank_sum.c"),
+                         ("rank_sum_f32", "generic_dense/rank_sum.c"),
                          ("paged_metadata_i32", "generic_dense/paged_metadata_i32.c"),
                          ("paged_alloc_i32", "generic_dense/paged_alloc_i32.c"),
                          ("paged_free_i32", "generic_dense/paged_free_i32.c"),
@@ -83,6 +87,10 @@ def main():
             flags = ["-DEWISE_BF16"]
         elif name == "sample_vocab_bf16":
             flags = ["-DSAMPLE_BF16"]
+        elif name == "apply_vocab_bitmask_bf16":
+            flags = ["-DBITMASK_BF16"]
+        elif name == "rank_sum_bf16":
+            flags = ["-DRANK_SUM_BF16"]
         subprocess.run([args.tpc_clang, "-O2", "-ffp-contract=off", "-mcpu=gaudi2", "-c",
                         *flags, str(root / f"csrc/tpc/{source}"), "-o", f"{name}.o"],
                        cwd=out, check=True)
@@ -91,6 +99,9 @@ def main():
         sample_abi = [b"tensor logits", b"tensor temperatures", b"tensor top_ps", b"tensor top_ks",
                       b"tensor min_ps", b"tensor seeds", b"tensor output_ids",
                       b"int vocab_size", b"int nan_to_neg_inf"]
+        bitmask_abi = [b"tensor logits_in", b"tensor bitmask", b"tensor logits_out",
+                       b"int active_cols", b"int mask_tail"]
+        rank_sum_abi = [b"tensor gathered", b"tensor dst", b"int world_size"]
         contracts = {
             "kv_store_head_major_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
             "kv_store_head_major64_bf16": kv_prefix + [b"tensor old_pool", b"tensor pool"],
@@ -103,6 +114,10 @@ def main():
             "gelu_and_mul_bf16": [b"tensor input", b"tensor output", b"int approximate"],
             "sample_vocab_bf16": sample_abi,
             "sample_vocab_f32": sample_abi,
+            "apply_vocab_bitmask_bf16": bitmask_abi,
+            "apply_vocab_bitmask_f32": bitmask_abi,
+            "rank_sum_bf16": rank_sum_abi,
+            "rank_sum_f32": rank_sum_abi,
             "paged_free_i32": [b"tensor indices", b"tensor metadata", b"tensor seen_bitset",
                                b"tensor pages", b"tensor result_count", b"int page_size"],
             "fp8_block_quant": [b"tensor input", b"tensor output", b"tensor scales"],
