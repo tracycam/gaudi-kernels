@@ -99,7 +99,7 @@ inline GlueCodeReturn instantiate_tile_indices(HabanaKernelParams* input, Habana
   const auto count = tasks.maxSizes[1];
   if (mapping.dataType != DATA_I32 || mapping.dims != 1 || !mapping.maxSizes[0] ||
       mapping.minSizes[0] != 1 || requests.dataType != DATA_I32 || requests.dims != 1 ||
-      !requests.maxSizes[0] || requests.minSizes[0] != requests.maxSizes[0] ||
+      !requests.maxSizes[0] || !requests.minSizes[0] || requests.minSizes[0] > requests.maxSizes[0] ||
       !count || !shape(input->inputTensors[2], DATA_I32, {4, count}) ||
       !shape(input->inputTensors[3], DATA_I32, {1}) ||
       !shape(input->outputTensors[0], DATA_I32, {64, count}))
